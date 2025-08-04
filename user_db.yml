@@ -1,0 +1,29 @@
+---
+- name: Criar usuário no PostgreSQL (sem verificação)
+  hosts: db_servers
+  become: true
+  vars:
+    db_username: app_user1
+    db_user_password: "SenhaApp123"
+
+  tasks:
+    - name: Criar usuário no PostgreSQL com senha
+      become_user: postgres
+      ansible.builtin.shell: |
+        psql -c "CREATE ROLE {{ db_username }} WITH LOGIN PASSWORD '{{ db_user_password }}';"
+      register: create_user_output
+      changed_when: "'CREATE ROLE' in create_user_output.stdout"
+      ignore_errors: yes
+
+    - name: Validar se o usuário existe no PostgreSQL
+      become_user: postgres
+      shell: |
+        psql -tAc "SELECT rolname FROM pg_roles WHERE rolname='{{ db_username }}';"
+      register: validate_user
+
+    - name: Mostrar resultado da validação
+      debug:
+        var: db_username
+
+~
+~
