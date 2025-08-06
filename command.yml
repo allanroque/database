@@ -1,0 +1,24 @@
+---
+- name: Execução de comandos no banco de dados
+  hosts: db_servers
+  become: true
+  vars:
+    db_command:
+#'psql -tAc "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname;"'
+# Listar bancos de dados = 	psql -tAc "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname;"
+# Listar usuários (roles) =	psql -tAc "SELECT rolname, rolsuper, rolcanlogin FROM pg_roles ORDER BY rolname;"
+# Listar tabelas =	psql -d postgres -tAc "SELECT schemaname, tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY schemaname, tablename;"
+# Ver versão do PostgreSQL	= psql -tAc "SELECT version();"
+# Contar sessões ativas	= psql -tAc "SELECT count(*) FROM pg_stat_activity;"
+# Ver permissões em uma base	= psql -tAc "SELECT grantee, privilege_type FROM information_schema.role_table_grants;"
+  tasks:
+    - name: Executar comando definido em db_command
+      become_user: postgres
+      ansible.builtin.shell: "{{ db_command }}"
+      register: command_output
+      ignore_errors: true
+      changed_when: false
+
+    - name: Exibir saída do comando
+      debug:
+        var: command_output.stdout_lines
