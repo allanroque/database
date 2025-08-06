@@ -1,0 +1,63 @@
+---
+- name: Popular PostgreSQL com bancos, usuários e permissões
+  hosts: db_servers
+  become: true
+
+  vars:
+    # Bancos a serem criados
+    pg_databases:
+      - app1
+      - app2
+      - financeiro
+      - rh
+      - marketing
+
+    # Usuários a serem criados
+    pg_users:
+      - { name: alice, password: "alice123", superuser: true }
+      - { name: bob, password: "bob123", superuser: true }
+      - { name: carol, password: "carol123", superuser: true }
+      - { name: dave, password: "dave123", superuser: false }
+      - { name: eva, password: "eva123", superuser: false }
+      - { name: frank, password: "frank123", superuser: false }
+      - { name: grace, password: "grace123", superuser: false }
+      - { name: heidi, password: "heidi123", superuser: false }
+      - { name: ivan, password: "ivan123", superuser: false }
+      - { name: judy, password: "judy123", superuser: false }
+
+    # Permissões por usuário e banco
+    pg_grants:
+      - { user: alice, db: app1, privileges: "ALL" }
+      - { user: bob, db: app2, privileges: "ALL" }
+      - { user: carol, db: financeiro, privileges: "ALL" }
+      - { user: dave, db: rh, privileges: "CONNECT" }
+      - { user: eva, db: financeiro, privileges: "CONNECT" }
+      - { user: frank, db: marketing, privileges: "CONNECT" }
+      - { user: grace, db: app1, privileges: "CONNECT" }
+      - { user: heidi, db: app2, privileges: "CONNECT" }
+      - { user: ivan, db: rh, privileges: "CONNECT" }
+      - { user: judy, db: marketing, privileges: "CONNECT" }
+
+  tasks:
+    - name: Criar bancos de dados
+      become_user: postgres
+      shell: |
+        psql -tc "SELECT 1 FROM pg_database WHERE datname = '{{ item }}';" | grep -q 1 || \
+        psql -c "CREATE DATABASE {{ item }};"
+      loop: "{{ pg_databases }}"
+      changed_when: true
+
+    - name: Criar usuários
+      become_user: postgres
+      shell: |
+        psql -tc "SELECT 1 FROM pg_roles WHERE rolname = '{{ item.name }}';" | grep -q 1 || \
+        psql -c "CREATE ROLE {{ item.name }} WITH LOGIN PASSWORD '{{ item.password }}' {{ 'SUPERUSER' if item.superuser else '' }};"
+      loop: "{{ pg_users }}"
+      changed_when: true
+
+    - name: Conceder permissões aos usuários
+      become_user: postgres
+      shell: |
+        psql -d {{ item.db }} -c "GRANT {{ item.privileges }} ON DATABASE {{ item.db }} TO {{ item.user }};"
+      loop: "{{ pg_grants }}"
+      changed_when: true
