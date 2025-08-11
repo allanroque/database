@@ -1,14 +1,28 @@
 ---
-- name: Popular banco com demo_bootstrap.sql
+- name: Popular banco com demo_bootstrap.sql (cria DB se faltar)
   hosts: server01.aroque.com.br
   become: true
 
   vars:
-    db_name: "awx"     # ajuste para sua base
-    sql_src: "files/demo_bootstrap.sql"
-    sql_dst: "/tmp/demo_bootstrap.sql"
+    db_name: "awx"                      # nome do banco
+    db_owner: "postgres"                # dono do banco (ajuste se quiser)
+    sql_src: "files/demo_bootstrap.sql" # caminho no seu repo
+    sql_dst: "/tmp/demo_bootstrap.sql"  # destino no host
 
   tasks:
+    - name: Verificar se o DB existe
+      become_user: postgres
+      ansible.builtin.command: >
+        psql -tAc "SELECT 1 FROM pg_database WHERE datname='{{ db_name }}';"
+      register: db_exists
+      changed_when: false
+
+    - name: Criar DB (se não existir)
+      become_user: postgres
+      ansible.builtin.command: >
+        createdb -O {{ db_owner }} {{ db_name }}
+      when: db_exists.stdout.strip() | length == 0
+
     - name: Copiar SQL de bootstrap
       ansible.builtin.copy:
         src: "{{ sql_src }}"
