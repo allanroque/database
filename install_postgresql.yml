@@ -1,0 +1,28 @@
+---
+- name: Instalacao e configuracao do postgresql server
+  hosts: server01.aroque.com.br
+  become: True
+  tasks:
+
+    - name: instalacao do pacote postgresql
+      ansible.builtin.package:
+        name: postgresql-server
+        state: present
+
+    - name: inicializacao do postgresql
+      ansible.builtin.command: postgresql-setup --initdb
+
+    - name: start service postgres
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+
+    - name: Exibir versão do PostgreSQL
+      become_user: postgres
+      ansible.builtin.command: psql -tAc "SELECT version();"
+      register: pg_ver
+      changed_when: false
+
+    - name: Mostrar versão retornada
+      ansible.builtin.debug:
+        var: pg_ver.stdout
