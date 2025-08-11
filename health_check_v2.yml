@@ -1,0 +1,185 @@
+---
+- name: PostgreSQL Health Check (SO + DB) com relatório JSON
+  hosts: db_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # ==== Ajuste conforme seu ambiente ====
+    db_name: "postgres"                 # DB alvo p/ queries gerais
+    pg_user: "postgres"                 # superuser local
+    pg_data_dir: "/var/lib/pgsql/data"  # padrão RHEL9
+    log_tail_lines: 200                 # quantas linhas do último log
+    push_results: false                 # true = envia p/ endpoint web
+    results_endpoint: "https://seu-endpoint/exemplo"  # endpoint REST (POST)
+    results_token: ""                   # se precisar Bearer token
+    # ======================================
+
+  tasks:
+    # -------- SO: kernel, uptime, CPU, memória, discos ----------
+    - name: Converter uptime em formato humano
+      ansible.builtin.set_fact:
+        hc_uptime_h: >-
+          {{ (ansible_facts.uptime_seconds | int) // 86400 }}d {{
+             ((ansible_facts.uptime_seconds | int) % 86400) // 3600 }}h {{
+             (((ansible_facts.uptime_seconds | int) % 3600) // 60) }}m
+
+    - name: Coletar sysctl relevantes para DB
+      ansible.builtin.shell: |
+        sysctl -n vm.swappiness || true
+        sysctl -n vm.dirty_background_ratio || true
+        sysctl -n vm.dirty_ratio || true
+        sysctl -n vm.dirty_background_bytes || true
+        sysctl -n vm.dirty_bytes || true
+        sysctl -n kernel.sched_autogroup_enabled || true
+      args: { warn: false }
+      register: sysctl_out
+      changed_when: false
+
+    - name: Verificar Transparent Huge Pages (THP)
+      ansible.builtin.shell: |
+        E=/sys/kernel/mm/transparent_hugepage/enabled
+        D=/sys/kernel/mm/transparent_hugepage/defrag
+        echo -n "enabled: "; (test -r $E && cat $E) || echo "n/a"
+        echo -n "defrag:  "; (test -r $D && cat $D) || echo "n/a"
+      register: thp_out
+      changed_when: false
+
+    - name: Checar firewall e SELinux
+      ansible.builtin.shell: |
+        echo -n "firewalld: "; systemctl is-active firewalld 2>/dev/null || true
+        echo "ports:"; (firewall-cmd --list-ports 2>/dev/null || echo "n/a")
+        echo -n "SELinux: "; (getenforce 2>/dev/null || echo "n/a")
+      register: sec_out
+      changed_when: false
+
+    - name: Portas 5432 em escuta
+      ansible.builtin.shell: ss -ltnp | grep ':5432 ' || true
+      register: ports_out
+      changed_when: false
+
+    # -------- Serviço PostgreSQL ----------
+    - name: Serviço PostgreSQL (status e enable)
+      ansible.builtin.shell: |
+        systemctl is-enabled postgresql || true
+        systemctl is-active postgresql || true
+      register: svc_out
+      changed_when: false
+
+    # -------- PostgreSQL: versão, hba, conf ----------
+    - name: Versão do binário
+      ansible.builtin.command: postgres -V
+      register: bin_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Consultas básicas no Postgres (via socket local)
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        psql -tAc "SELECT version();" || true
+        psql -tAc "SHOW server_version_num;" || true
+        psql -tAc "SHOW listen_addresses;" || true
+        psql -tAc "SHOW port;" || true
+        psql -tAc "SHOW config_file;" || true
+        psql -tAc "SHOW hba_file;" || true
+        psql -tAc "SHOW log_directory;" || true
+        psql -tAc "SHOW log_filename;" || true
+      register: psql_basic
+      changed_when: false
+
+    - name: Bancos, roles e conexões
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        echo "-- databases --"
+        psql -tAc "SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname;" || true
+        echo "-- roles --"
+        psql -tAc "SELECT rolname, rolsuper, rolcanlogin FROM pg_roles ORDER BY rolname;" || true
+        echo "-- conns --"
+        psql -tAc "SELECT count(*) total FROM pg_stat_activity;" || true
+        psql -tAc "SELECT state, count(*) FROM pg_stat_activity GROUP BY state;" || true
+        psql -tAc "SHOW max_connections;" || true
+      register: psql_acc
+      changed_when: false
+
+    - name: Storage/WAL e parâmetros chave
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        echo "-- sizes --"
+        psql -tAc "SELECT datname, pg_size_pretty(pg_database_size(datname)) FROM pg_database ORDER BY 2 DESC;" || true
+        echo "-- wal --"
+        psql -tAc "SHOW wal_level;" || true
+        psql -x -c "SELECT checkpoints_timed, checkpoints_req, buffers_checkpoint, buffers_clean, maxwritten_clean, buffers_backend, buffers_backend_fsync FROM pg_stat_bgwriter;" || true
+        echo "-- params --"
+        psql -tAc "SHOW shared_buffers;" || true
+        psql -tAc "SHOW work_mem;" || true
+        psql -tAc "SHOW maintenance_work_mem;" || true
+        psql -tAc "SHOW effective_cache_size;" || true
+        psql -tAc "SHOW max_wal_size;" || true
+        psql -tAc "SHOW timezone;" || true
+        psql -tAc "SHOW log_min_duration_statement;" || true
+      register: psql_params
+      changed_when: false
+
+    - name: Último log e erros recentes
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        LOGDIR=$(psql -tAc "SHOW log_directory;" | tr -d ' ') || echo ""
+        if [ -z "$LOGDIR" ]; then exit 0; fi
+        LD="{{ pg_data_dir }}/$LOGDIR"
+        LAST=$(ls -1t "$LD" 2>/dev/null | head -1)
+        echo "-- last_log_file --"
+        echo "$LAST"
+        echo "-- tail --"
+        tail -n {{ log_tail_lines }} "$LD/$LAST" 2>/dev/null | egrep -i "ERROR|FATAL|PANIC" || true
+      register: psql_logs
+      changed_when: false
+
+    # -------- Montar relatório JSON ----------
+    - name: Montar dicionário com resultados
+      ansible.builtin.set_fact:
+        pg_health:
+          collected_at: "{{ ansible_date_time.iso8601 }}"
+          host: "{{ inventory_hostname }}"
+          os:
+            hostname: "{{ ansible_facts.hostname }}"
+            os_family: "{{ ansible_facts.os_family }}"
+            distribution: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+            kernel: "{{ ansible_facts.kernel }}"
+            kernel_release: "{{ ansible_facts.kernel_release }}"
+            arch: "{{ ansible_facts.architecture }}"
+            uptime_h: "{{ hc_uptime_h }}"
+            cpu_count: "{{ ansible_facts.processor_vcpus | default(ansible_facts.processor_count) }}"
+            mem_mb: "{{ ansible_facts.memtotal_mb }}"
+            mounts: "{{ ansible_facts.mounts | map(attribute='mount') | list }}"
+            sysctl_sample: "{{ sysctl_out.stdout_lines | default([]) }}"
+            thp: "{{ thp_out.stdout | default('') }}"
+            security: "{{ sec_out.stdout | default('') }}"
+            port_5432: "{{ ports_out.stdout | default('') }}"
+          service:
+            status: "{{ svc_out.stdout_lines | default([]) }}"
+          postgres:
+            bin_version: "{{ bin_ver.stdout | default('') }}"
+            basics: "{{ psql_basic.stdout | default('') }}"
+            accounts: "{{ psql_acc.stdout | default('') }}"
+            params: "{{ psql_params.stdout | default('') }}"
+            logs_tail: "{{ psql_logs.stdout | default('') }}"
+
+    - name: Salvar relatório em /tmp/pg_health.json
+      ansible.builtin.copy:
+        dest: "/tmp/pg_health.json"
+        content: "{{ pg_health | to_nice_json }}"
+        mode: "0644"
+
+    # -------- (Opcional) Enviar para tua interface web ----------
+    - name: Enviar relatório para endpoint (se habilitado)
+      when: push_results | bool
+      ansible.builtin.uri:
+        url: "{{ results_endpoint }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+          Authorization: "{{ 'Bearer ' + results_token if results_token | length > 0 else omit }}"
+        body: "{{ pg_health | to_nice_json }}"
+        status_code: [200,201,202]
+        validate_certs: false
+

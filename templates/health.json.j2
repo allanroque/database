@@ -1,0 +1,21 @@
+{
+  "collected_at": "{{ report.collected_at }}",
+  "host": "{{ report.host }}",
+  "os": {
+    "distro": "{{ report.os.distro }}",
+    "kernel": "{{ report.os.kernel }}",
+    "arch": "{{ report.os.arch }}",
+    "uptime": "{{ report.os.uptime }}",
+    "mem_mb": {{ report.os.mem_mb }},
+    "cpu_vcpus": {{ report.os.cpu_vcpus }},
+    "mounts": {{ report.os.mounts | tojson }},
+    "sysctl_sample": {{ report.os.sysctl_sample | tojson }},
+    "thp": {{ report.os.thp | tojson }}
+  },
+  "postgres": {
+    "basics": {{ report.postgres.basics | tojson }},
+    "db_sizes": {{ report.postgres.db_sizes | tojson }},
+    "recent_errors": {{ report.postgres.recent_errors | tojson }}
+  }
+}
+

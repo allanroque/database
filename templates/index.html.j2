@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8">
+  <title>PG Health - {{ report.host }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:24px;line-height:1.35}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-bottom:16px}
+    h1{margin:0 0 8px 0} h2{margin:8px 0}
+    code,pre{background:#f7f7f7;border:1px solid #eee;border-radius:8px;padding:8px;display:block;overflow:auto}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+    .muted{color:#666}
+  </style>
+</head>
+<body>
+  <h1>PostgreSQL Health — {{ report.host }}</h1>
+  <div class="muted">Coletado em {{ report.collected_at }}</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>SO</h2>
+      <div><b>Distro:</b> {{ report.os.distro }}</div>
+      <div><b>Kernel:</b> {{ report.os.kernel }}</div>
+      <div><b>Arch:</b> {{ report.os.arch }}</div>
+      <div><b>Uptime:</b> {{ report.os.uptime }}</div>
+      <div><b>Memória:</b> {{ report.os.mem_mb }} MB</div>
+      <div><b>vCPUs:</b> {{ report.os.cpu_vcpus }}</div>
+      <div><b>Mounts:</b> {{ report.os.mounts|join(', ') }}</div>
+    </div>
+
+    <div class="card">
+      <h2>PostgreSQL (básico)</h2>
+      <pre>{{ report.postgres.basics }}</pre>
+    </div>
+
+    <div class="card">
+      <h2>Tamanho por DB</h2>
+      <pre>{{ report.postgres.db_sizes }}</pre>
+    </div>
+
+    <div class="card">
+      <h2>Erros recentes (log)</h2>
+      <pre>{{ report.postgres.recent_errors or 'Sem erros recentes.' }}</pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>JSON cru</h2>
+    <div class="muted">Disponível em <code>/pg-health/health.json</code></div>
+    <pre>{{ report | to_nice_json }}</pre>
+  </div>
+</body>
+</html>
+
