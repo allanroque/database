@@ -24,8 +24,6 @@
         sysctl -n vm.swappiness || true
         sysctl -n vm.dirty_background_ratio || true
         sysctl -n vm.dirty_ratio || true
-      args:
-        warn: false
       register: sysctl_out
       changed_when: false
 
@@ -35,8 +33,6 @@
         D=/sys/kernel/mm/transparent_hugepage/defrag
         echo -n "enabled: "; (test -r "$E" && cat "$E") || echo "n/a"
         echo -n "defrag:  "; (test -r "$D" && cat "$D") || echo "n/a"
-      args:
-        warn: false
       register: thp_out
       changed_when: false
 
@@ -75,8 +71,6 @@
         tail -n {{ log_tail_lines }} "{{ pg_data_dir }}/$LOGDIR/$LAST" 2>/dev/null | egrep -i "ERROR|FATAL|PANIC" || true
       register: log_errs
       changed_when: false
-      args:
-        warn: false
 
     # ====== Monta dicionário ======
     - name: Consolidar relatório
@@ -129,16 +123,6 @@
         name: httpd
         state: started
         enabled: true
-
-    # (Opcional) abrir porta 80 no firewalld
-    - name: Abrir porta 80/tcp no firewalld (se ativo)
-      ansible.builtin.shell: |
-        systemctl is-active --quiet firewalld && \
-        firewall-cmd --add-service=http --permanent && \
-        firewall-cmd --reload || true
-      args:
-        warn: false
-      changed_when: false
 
   handlers:
     - name: reload apache
