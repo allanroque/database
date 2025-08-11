@@ -24,7 +24,8 @@
         sysctl -n vm.swappiness || true
         sysctl -n vm.dirty_background_ratio || true
         sysctl -n vm.dirty_ratio || true
-      args: {warn: false}
+      args:
+	warn: false
       register: sysctl_out
       changed_when: false
 
@@ -34,6 +35,8 @@
         D=/sys/kernel/mm/transparent_hugepage/defrag
         echo -n "enabled: "; (test -r $E && cat $E) || echo "n/a"
         echo -n "defrag:  "; (test -r $D && cat $D) || echo "n/a"
+      args:
+	warn: false
       register: thp_out
       changed_when: false
 
