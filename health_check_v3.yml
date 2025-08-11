@@ -117,6 +117,14 @@
         src: "templates/style.css"
         dest: "{{ web_root }}/style.css"
         mode: "0644"
+      notify: reload apache
+
+    - name: Publicar script.js (opcional)
+      ansible.builtin.copy:
+        src: "templates/script.js"
+        dest: "{{ web_root }}/script.js"
+        mode: "0644"
+      notify: reload apache
 
     - name: Publicar página (index.html)
       ansible.builtin.template:

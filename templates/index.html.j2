@@ -1,48 +1,82 @@
 <!doctype html>
 <html lang="pt-br">
 <head>
-  <meta charset="utf-8">
-  <title>PG Health - {{ report.host }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="style.css?v=1">
+  <meta charset="utf-8" />
+  <title>PG Health — {{ report.host }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="style.css?v=1" />
+  <script defer src="script.js"></script>
 </head>
 <body>
-  <h1>PostgreSQL Health — {{ report.host }} <span class="badge">live</span></h1>
-  <div class="muted">Coletado em {{ report.collected_at }}</div>
+  <header>
+    <h1>PG Health</h1>
+    <ul class="nav-links">
+      <li><a href="#so">SO</a></li>
+      <li><a href="#pg">PostgreSQL</a></li>
+      <li><a href="#sizes">Tamanho por DB</a></li>
+      <li><a href="#logs">Logs</a></li>
+    </ul>
+  </header>
 
-  <div class="grid" style="margin-top:12px">
-    <div class="card">
-      <h2>SO</h2>
-      <div><b>Distro:</b> {{ report.os.distro }}</div>
-      <div><b>Kernel:</b> {{ report.os.kernel }}</div>
-      <div><b>Arch:</b> {{ report.os.arch }}</div>
-      <div><b>Uptime:</b> {{ report.os.uptime }}</div>
-      <div><b>Memória:</b> {{ report.os.mem_mb }} MB</div>
-      <div><b>vCPUs:</b> {{ report.os.cpu_vcpus }}</div>
-      <div><b>Mounts:</b> {{ report.os.mounts|join(', ') }}</div>
-    </div>
+  <section class="hero-section">
+    <h2>{{ report.host }}</h2>
+    <p>Coletado em {{ report.collected_at }}</p>
+  </section>
 
-    <div class="card">
-      <h2>PostgreSQL (básico)</h2>
-      <pre>{{ report.postgres.basics }}</pre>
-    </div>
+  <div class="container">
+    <main>
+      <div id="so" class="card">
+        <h3>SO</h3>
+        <p><b>Distro:</b> {{ report.os.distro }}</p>
+        <p><b>Kernel:</b> {{ report.os.kernel }}</p>
+        <p><b>Arch:</b> {{ report.os.arch }}</p>
+        <p><b>Uptime:</b> {{ report.os.uptime }}</p>
+        <p><b>Memória:</b> {{ report.os.mem_mb }} MB &nbsp; <b>vCPUs:</b> {{ report.os.cpu_vcpus }}</p>
+        <p><b>Mounts:</b> {{ report.os.mounts|join(', ') }}</p>
+      </div>
 
-    <div class="card">
-      <h2>Tamanho por DB</h2>
-      <pre>{{ report.postgres.db_sizes }}</pre>
-    </div>
+      <div id="pg" class="card">
+        <h3>PostgreSQL (básico)</h3>
+        <pre>{{ report.postgres.basics }}</pre>
+      </div>
 
-    <div class="card">
-      <h2>Erros recentes (log)</h2>
-      <pre>{{ report.postgres.recent_errors or 'Sem erros recentes.' }}</pre>
-    </div>
+      <div id="sizes" class="card">
+        <h3>Tamanho por DB</h3>
+        <pre>{{ report.postgres.db_sizes }}</pre>
+      </div>
+
+      <div id="logs" class="card">
+        <h3>Erros recentes (log)</h3>
+        <pre>{{ report.postgres.recent_errors or 'Sem erros recentes.' }}</pre>
+      </div>
+
+      <div class="card">
+        <h3>JSON cru</h3>
+        <p>Disponível em <code>/pg-health/health.json</code></p>
+        <pre>{{ report | to_nice_json }}</pre>
+      </div>
+    </main>
+
+    <aside>
+      <h3>Atalhos</h3>
+      <ul id="playlist">
+        <li onclick="location.href='#so'">Sistema Operacional</li>
+        <li onclick="location.href='#pg'">Parâmetros PG</li>
+        <li onclick="location.href='#sizes'">Tamanhos</li>
+        <li onclick="location.href='#logs'">Logs</li>
+      </ul>
+
+      <div class="ad-block">
+        <p><b>Status rápido</b></p>
+        <p><span class="pill ok"></span> serviço ativo</p>
+        <p><span class="pill warn"></span> verifique autenticação</p>
+      </div>
+    </aside>
   </div>
 
-  <div class="card" style="margin-top:16px">
-    <h2>JSON cru</h2>
-    <div class="muted">Disponível em <code>/pg-health/health.json</code></div>
-    <pre>{{ report | to_nice_json }}</pre>
-  </div>
+  <footer>
+    <p>PG Health Lab • gerado por Ansible</p>
+  </footer>
 </body>
 </html>
 
