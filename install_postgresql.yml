@@ -1,21 +1,31 @@
 ---
-- name: Instalacao e configuracao do postgresql server
+- name: Instalação e configuração do PostgreSQL Server
   hosts: server01.aroque.com.br
-  become: True
-  tasks:
+  become: true
 
-    - name: instalacao do pacote postgresql
+  vars:
+    pg_data_dir: "/var/lib/pgsql/data"
+
+  tasks:
+    - name: Instalar pacote postgresql-server
       ansible.builtin.package:
         name: postgresql-server
         state: present
 
-    - name: inicializacao do postgresql
-      ansible.builtin.command: postgresql-setup --initdb
+    - name: Verificar se o cluster já foi inicializado
+      ansible.builtin.stat:
+        path: "{{ pg_data_dir }}/PG_VERSION"
+      register: pgver
 
-    - name: start service postgres
+    - name: Inicializar cluster (equivale a postgresql-setup --initdb)
+      ansible.builtin.command: postgresql-setup --initdb
+      when: not pgver.stat.exists
+
+    - name: Iniciar e habilitar serviço postgresql
       ansible.builtin.service:
         name: postgresql
         state: started
+        enabled: true
 
     - name: Exibir versão do PostgreSQL
       become_user: postgres
