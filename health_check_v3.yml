@@ -79,13 +79,14 @@
           collected_at: "{{ ansible_date_time.iso8601 }}"
           host: "{{ inventory_hostname }}"
           os:
-            distro: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
-            kernel: "{{ ansible_facts.kernel }} {{ ansible_facts.kernel_release }}"
-            arch: "{{ ansible_facts.architecture }}"
+            distro: "{{ (ansible_facts.distribution | default(ansible_distribution)) ~ ' ' ~ (ansible_facts.distribution_version | default(ansible_distribution_version)) }}"
+            # 'kernel' (ex.: Linux) + release (use ansible_kernel como fallback)
+            kernel: "{{ (ansible_facts.kernel | default(ansible_system)) ~ ' ' ~ (ansible_facts.kernel_release | default(ansible_kernel)) }}"
+            arch: "{{ ansible_facts.architecture | default(ansible_architecture) }}"
             uptime: "{{ uptime_h }}"
-            mem_mb: "{{ ansible_facts.memtotal_mb }}"
-            cpu_vcpus: "{{ ansible_facts.processor_vcpus | default(ansible_facts.processor_count) }}"
-            mounts: "{{ ansible_facts.mounts | map(attribute='mount') | list }}"
+            mem_mb: "{{ ansible_facts.memtotal_mb | default(0) }}"
+            cpu_vcpus: "{{ ansible_facts.processor_vcpus | default(ansible_facts.processor_count | default(0)) }}"
+            mounts: "{{ (ansible_facts.mounts | default([])) | map(attribute='mount') | list }}"
             sysctl_sample: "{{ sysctl_out.stdout_lines | default([]) }}"
             thp: "{{ thp_out.stdout | default('') }}"
           postgres:
