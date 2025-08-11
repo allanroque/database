@@ -21,6 +21,14 @@
       ansible.builtin.command: postgresql-setup --initdb
       when: not pgver.stat.exists
 
+    - name: configuracao do arquivo pg_hba.conf
+      ansible.builtin.copy:
+        src: files/pg_hba.conf
+        dest: /var/lib/pgsql/data/pg_hba.conf
+        owner: postgres
+        group: postgres
+        mode: 0600
+
     - name: Iniciar e habilitar serviço postgresql
       ansible.builtin.service:
         name: postgresql
