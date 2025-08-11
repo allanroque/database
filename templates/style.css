@@ -1,0 +1,18 @@
+root {
+            --bg: #0b132b; --card: #1c2541; --accent: #3a86ff;
+            --ok: #2ec4b6; --warn: #ffbe0b; --err: #ef476f;
+            --text: #e6edf3; --muted: #9aa6b2;
+          }
+          *{box-sizing:border-box}
+          body{margin:24px;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.35}
+          h1{margin:0 0 8px 0}
+          .muted{color:var(--muted)}
+          .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+          .card{
+            background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+            border:1px solid rgba(255,255,255,.12); border-radius:14px; padding:16px;
+            box-shadow:0 10px 20px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.05)
+          }
+          pre,code{background:#0f182f;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px;overflow:auto}
+          .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:var(--accent);color:#fff;font-weight:600;font-size:.8rem}
+          .ok{background:var(--ok)} .warn{background:var(--warn)} .err{background:var(--err)}

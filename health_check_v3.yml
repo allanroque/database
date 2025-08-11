@@ -112,6 +112,12 @@
         dest: "{{ web_root }}/health.json"
         mode: "0644"
 
+    - name: Publicar css (health.json)
+      ansible.builtin.copy:
+        src: "templates/style.css"
+        dest: "{{ web_root }}/style.css"
+        mode: "0644"
+
     - name: Publicar página (index.html)
       ansible.builtin.template:
         src: "templates/index.html.j2"
