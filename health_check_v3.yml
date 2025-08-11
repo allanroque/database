@@ -1,5 +1,5 @@
 ---
-- name: PostgreSQL HealthCheck + Web (nginx + templates)
+- name: PostgreSQL HealthCheck + Web (Apache + templates)
   hosts: db_servers
   become: true
   gather_facts: true
@@ -8,42 +8,42 @@
     pg_user: "postgres"
     pg_data_dir: "/var/lib/pgsql/data"
     log_tail_lines: 200
-    web_root: "/usr/share/nginx/html/pg-health"
+    web_root: "/var/www/html/pg-health"   # DocumentRoot padrão do Apache
 
   tasks:
     # ====== SO ======
     - name: Uptime humano
-      set_fact:
+      ansible.builtin.set_fact:
         uptime_h: >-
-          {{ (ansible_facts.uptime_seconds|int)//86400 }}d
-          {{ ((ansible_facts.uptime_seconds|int)%86400)//3600 }}h
-          {{ (((ansible_facts.uptime_seconds|int)%3600)//60) }}m
+          {{ (ansible_facts.uptime_seconds | int) // 86400 }}d
+          {{ ((ansible_facts.uptime_seconds | int) % 86400) // 3600 }}h
+          {{ (((ansible_facts.uptime_seconds | int) % 3600) // 60) }}m
 
-    - name: Sysctl relevantes
-      shell: |
+    - name: Sysctl relevantes (sem warnings de shell)
+      ansible.builtin.shell: |
         sysctl -n vm.swappiness || true
         sysctl -n vm.dirty_background_ratio || true
         sysctl -n vm.dirty_ratio || true
       args:
-	warn: false
+        warn: false
       register: sysctl_out
       changed_when: false
 
     - name: THP status
-      shell: |
+      ansible.builtin.shell: |
         E=/sys/kernel/mm/transparent_hugepage/enabled
         D=/sys/kernel/mm/transparent_hugepage/defrag
-        echo -n "enabled: "; (test -r $E && cat $E) || echo "n/a"
-        echo -n "defrag:  "; (test -r $D && cat $D) || echo "n/a"
+        echo -n "enabled: "; (test -r "$E" && cat "$E") || echo "n/a"
+        echo -n "defrag:  "; (test -r "$D" && cat "$D") || echo "n/a"
       args:
-	warn: false
+        warn: false
       register: thp_out
       changed_when: false
 
-    # ====== Postgres ======
+    # ====== PostgreSQL ======
     - name: Postgres básico (via socket)
       become_user: "{{ pg_user }}"
-      shell: |
+      ansible.builtin.shell: |
         psql -tAc "SELECT version();"                || true
         psql -tAc "SHOW server_version_num;"        || true
         psql -tAc "SHOW listen_addresses;"          || true
@@ -57,23 +57,30 @@
 
     - name: Tamanhos por DB
       become_user: "{{ pg_user }}"
-      command: psql -tAc "SELECT datname, pg_size_pretty(pg_database_size(datname)) FROM pg_database WHERE datistemplate=false ORDER BY 2 DESC;"
+      ansible.builtin.command: >
+        psql -tAc
+        "SELECT datname, pg_size_pretty(pg_database_size(datname))
+         FROM pg_database
+         WHERE datistemplate=false
+         ORDER BY 2 DESC;"
       register: db_sizes
       changed_when: false
 
     - name: Últimos erros de log
       become_user: "{{ pg_user }}"
-      shell: |
+      ansible.builtin.shell: |
         LOGDIR=$(psql -tAc "SHOW log_directory;" | tr -d ' ')
         [ -z "$LOGDIR" ] && exit 0
-        LAST=$(ls -1t {{ pg_data_dir }}/$LOGDIR 2>/dev/null | head -1)
+        LAST=$(ls -1t "{{ pg_data_dir }}/$LOGDIR" 2>/dev/null | head -1)
         tail -n {{ log_tail_lines }} "{{ pg_data_dir }}/$LOGDIR/$LAST" 2>/dev/null | egrep -i "ERROR|FATAL|PANIC" || true
       register: log_errs
       changed_when: false
+      args:
+        warn: false
 
     # ====== Monta dicionário ======
     - name: Consolidar relatório
-      set_fact:
+      ansible.builtin.set_fact:
         report:
           collected_at: "{{ ansible_date_time.iso8601 }}"
           host: "{{ inventory_hostname }}"
@@ -92,40 +99,50 @@
             db_sizes: "{{ db_sizes.stdout | default('') }}"
             recent_errors: "{{ log_errs.stdout | default('') }}"
 
-    # ====== Web assets ======
+    # ====== Web (Apache + templates) ======
     - name: Instalar Apache (httpd)
-      package:
+      ansible.builtin.package:
         name: httpd
         state: present
 
     - name: Criar diretório do site
-      file:
+      ansible.builtin.file:
         path: "{{ web_root }}"
         state: directory
         mode: "0755"
 
     - name: Publicar JSON (health.json)
-      template:
+      ansible.builtin.template:
         src: "templates/health.json.j2"
         dest: "{{ web_root }}/health.json"
         mode: "0644"
 
     - name: Publicar página (index.html)
-      template:
+      ansible.builtin.template:
         src: "templates/index.html.j2"
         dest: "{{ web_root }}/index.html"
         mode: "0644"
       notify: reload apache
 
     - name: Habilitar e subir Apache
-      service:
+      ansible.builtin.service:
         name: httpd
         state: started
         enabled: true
 
+    # (Opcional) abrir porta 80 no firewalld
+    - name: Abrir porta 80/tcp no firewalld (se ativo)
+      ansible.builtin.shell: |
+        systemctl is-active --quiet firewalld && \
+        firewall-cmd --add-service=http --permanent && \
+        firewall-cmd --reload || true
+      args:
+        warn: false
+      changed_when: false
+
   handlers:
     - name: reload apache
-      service:
+      ansible.builtin.service:
         name: httpd
         state: reloaded
 
