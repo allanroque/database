@@ -1,0 +1,39 @@
+---
+- name: Popular banco com demo_bootstrap.sql
+  hosts: server01.aroque.com.br
+  become: true
+
+  vars:
+    db_name: "awx"     # ajuste para sua base
+    sql_src: "files/demo_bootstrap.sql"
+    sql_dst: "/tmp/demo_bootstrap.sql"
+
+  tasks:
+    - name: Copiar SQL de bootstrap
+      ansible.builtin.copy:
+        src: "{{ sql_src }}"
+        dest: "{{ sql_dst }}"
+        mode: "0644"
+
+    - name: Executar SQL (via socket local, usuário postgres)
+      become_user: postgres
+      ansible.builtin.command: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -f {{ sql_dst }}
+      register: runsql
+      changed_when: "'ERROR' not in runsql.stderr"
+
+    - name: Sanity check (contagens)
+      become_user: postgres
+      ansible.builtin.command: >
+        psql -tAc "SELECT
+          (SELECT count(*) FROM demo.customers),
+          (SELECT count(*) FROM demo.products),
+          (SELECT count(*) FROM demo.orders),
+          (SELECT count(*) FROM demo.order_items);" -d {{ db_name }}
+      register: counts
+      changed_when: false
+
+    - name: Exibir contagens
+      ansible.builtin.debug:
+        msg: "customers, products, orders, order_items = {{ counts.stdout }}"
+
