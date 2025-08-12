@@ -1,0 +1,20 @@
+---
+- name: Conceder privilégios no schema adicional
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases.Item("{{ sql_database }}")
+    
+    {% if access_profile == 'readonly' %}
+    # Privilégios readonly no schema adicional
+    $query = "GRANT SELECT ON SCHEMA::{{ additional_schema.name }} TO [{{ sql_username }}]"
+    {% elif access_profile == 'readwrite' %}
+    # Privilégios readwrite no schema adicional
+    $query = "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::{{ additional_schema.name }} TO [{{ sql_username }}]"
+    {% elif access_profile == 'dbadmin' %}
+    # Privilégios admin no schema adicional
+    $query = "GRANT CONTROL ON SCHEMA::{{ additional_schema.name }} TO [{{ sql_username }}]"
+    {% endif %}
+    
+    $db.ExecuteNonQuery($query)
+    Write-Output "Privilégios no schema {{ additional_schema.name }} concedidos para {{ sql_username }}"

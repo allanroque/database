@@ -135,6 +135,6 @@
           Perfil aplicado: '{{ access_profile }}' em DB='{{ db_name }}' schema='{{ schema_name }}'.
         register: create_user_output
 
-    - set_stats:
-        data:
-          sn_close_notes: "{{ create_user_output.stdout }}"
+#    - set_stats:
+#        data:
+#          sn_close_notes: "{{ create_user_output.stdout }}"

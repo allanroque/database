@@ -1,0 +1,268 @@
+---
+- name: Gerenciamento de Usuários SQL Server (AAP Compatible)
+  hosts: windows_db_servers
+  gather_facts: false
+
+  vars:
+    # ===== VARIÁVEIS DO SURVEY AAP =====
+    # Configurações básicas
+    sql_instance: "{{ sql_server_instance | default('MSSQLSERVER') }}"
+    sql_database: "{{ target_database | default('master') }}"
+    sql_schema: "{{ target_schema | default('dbo') }}"
+    sql_username: "{{ username }}"
+    sql_user_password: "{{ user_password }}"
+    access_profile: "{{ profile | default('readonly') }}"   # readonly | readwrite | dbadmin
+
+    # Configurações de hardening
+    login_enabled: "{{ login_enabled | default(true) }}"
+    password_policy: "{{ password_policy | default(true) }}"
+    password_expiration: "{{ password_expiration | default(false) }}"
+    default_database: "{{ default_database | default('master') }}"
+
+    # Configurações opcionais
+    create_user_only: "{{ create_user_only | default(false) }}"
+    update_existing: "{{ update_existing | default(true) }}"
+    add_comment: "{{ add_comment | default('') }}"
+
+    # Configurações de múltiplos bancos/schemas
+    additional_databases: "{{ additional_databases | default([]) }}"
+    additional_schemas: "{{ additional_schemas | default([]) }}"
+
+  pre_tasks:
+    - name: Validar variáveis obrigatórias
+      assert:
+        that:
+          - sql_username is defined
+          - sql_user_password is defined
+          - sql_database is defined
+          - access_profile in ['readonly', 'readwrite', 'dbadmin']
+        fail_msg: "Variáveis obrigatórias não definidas ou perfil inválido"
+
+    - name: Verificar conectividade com SQL Server
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $smo.Version
+      register: sql_connectivity
+      failed_when: false
+
+    - name: Falhar se SQL Server não estiver acessível
+      fail:
+        msg: "SQL Server não está acessível. Verifique se o serviço está rodando."
+      when: sql_connectivity.rc != 0
+
+  tasks:
+    - name: Verificar se o login já existe
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $login = $smo.Logins.Item("{{ sql_username }}")
+        if ($login) { Write-Output "EXISTS" } else { Write-Output "NOT_EXISTS" }
+      register: login_exists
+      changed_when: false
+
+    - name: Criar login SQL (se não existir)
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        
+        $login = New-Object Microsoft.SqlServer.Management.Smo.Login $smo, "{{ sql_username }}"
+        $login.LoginType = [Microsoft.SqlServer.Management.Smo.LoginType]::SqlLogin
+        $login.PasswordPolicyEnforced = {{ password_policy | lower }}
+        $login.PasswordExpirationEnabled = {{ password_expiration | lower }}
+        $login.DefaultDatabase = "{{ default_database }}"
+        $login.Create("{{ sql_user_password }}")
+        
+        Write-Output "Login {{ sql_username }} criado com sucesso"
+      when: 
+        - login_exists.stdout.strip() == "NOT_EXISTS"
+        - not create_user_only | bool
+      no_log: true
+
+    - name: Atualizar login existente (se solicitado)
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        
+        $login = $smo.Logins.Item("{{ sql_username }}")
+        $login.ChangePassword("{{ sql_user_password }}")
+        $login.PasswordPolicyEnforced = {{ password_policy | lower }}
+        $login.PasswordExpirationEnabled = {{ password_expiration | lower }}
+        $login.DefaultDatabase = "{{ default_database }}"
+        $login.Alter()
+        
+        Write-Output "Login {{ sql_username }} atualizado com sucesso"
+      when: 
+        - login_exists.stdout.strip() == "EXISTS"
+        - update_existing | bool
+      no_log: true
+
+    - name: Habilitar/Desabilitar login
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        
+        $login = $smo.Logins.Item("{{ sql_username }}")
+        $login.IsDisabled = -not {{ login_enabled | lower }}
+        $login.Alter()
+        
+        Write-Output "Login {{ sql_username }} {{ 'habilitado' if login_enabled else 'desabilitado' }}"
+      when: login_exists.stdout.strip() == "EXISTS"
+
+    # ===== CONCESSÕES NO BANCO PRINCIPAL =====
+    - name: Verificar se o banco principal existe
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $db = $smo.Databases.Item("{{ sql_database }}")
+        if ($db) { Write-Output "EXISTS" } else { Write-Output "NOT_EXISTS" }
+      register: db_exists
+      changed_when: false
+
+    - name: Criar usuário no banco principal
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $db = $smo.Databases.Item("{{ sql_database }}")
+        
+        # Verificar se usuário já existe
+        $user = $db.Users.Item("{{ sql_username }}")
+        if (-not $user) {
+          $user = New-Object Microsoft.SqlServer.Management.Smo.User $db, "{{ sql_username }}"
+          $user.Login = "{{ sql_username }}"
+          $user.Create()
+          Write-Output "Usuário {{ sql_username }} criado no banco {{ sql_database }}"
+        } else {
+          Write-Output "Usuário {{ sql_username }} já existe no banco {{ sql_database }}"
+        }
+      when: db_exists.stdout.strip() == "EXISTS"
+
+    - name: Conceder privilégios no banco principal (perfil)
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $db = $smo.Databases.Item("{{ sql_database }}")
+        
+        {% if access_profile == 'readonly' %}
+        # Perfil readonly
+        $db.Roles.Item("db_datareader").AddMember("{{ sql_username }}")
+        Write-Output "Perfil readonly aplicado para {{ sql_username }}"
+        {% elif access_profile == 'readwrite' %}
+        # Perfil readwrite
+        $db.Roles.Item("db_datareader").AddMember("{{ sql_username }}")
+        $db.Roles.Item("db_datawriter").AddMember("{{ sql_username }}")
+        Write-Output "Perfil readwrite aplicado para {{ sql_username }}"
+        {% elif access_profile == 'dbadmin' %}
+        # Perfil dbadmin
+        $db.Roles.Item("db_owner").AddMember("{{ sql_username }}")
+        Write-Output "Perfil dbadmin aplicado para {{ sql_username }}"
+        {% endif %}
+      when: db_exists.stdout.strip() == "EXISTS"
+
+    - name: Conceder privilégios específicos no schema principal
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $db = $smo.Databases.Item("{{ sql_database }}")
+        
+        {% if access_profile == 'readonly' %}
+        # Privilégios readonly no schema
+        $query = "GRANT SELECT ON SCHEMA::{{ sql_schema }} TO [{{ sql_username }}]"
+        {% elif access_profile == 'readwrite' %}
+        # Privilégios readwrite no schema
+        $query = "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::{{ sql_schema }} TO [{{ sql_username }}]"
+        {% elif access_profile == 'dbadmin' %}
+        # Privilégios admin no schema
+        $query = "GRANT CONTROL ON SCHEMA::{{ sql_schema }} TO [{{ sql_username }}]"
+        {% endif %}
+        
+        $db.ExecuteNonQuery($query)
+        Write-Output "Privilégios no schema {{ sql_schema }} concedidos para {{ sql_username }}"
+      when: db_exists.stdout.strip() == "EXISTS"
+
+    # ===== CONCESSÕES EM BANCOS ADICIONAIS =====
+    - name: Processar bancos adicionais
+      include_tasks: tasks/manage_additional_sqlserver_database.yml
+      loop: "{{ additional_databases }}"
+      loop_control:
+        loop_var: additional_db
+      when: additional_databases | length > 0
+
+    # ===== CONCESSÕES EM SCHEMAS ADICIONAIS =====
+    - name: Processar schemas adicionais
+      include_tasks: tasks/manage_additional_sqlserver_schema.yml
+      loop: "{{ additional_schemas }}"
+      loop_control:
+        loop_var: additional_schema
+      when: additional_schemas | length > 0
+
+    - name: Verificar login criado/atualizado
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $login = $smo.Logins.Item("{{ sql_username }}")
+        
+        Write-Output "Login: $($login.Name)"
+        Write-Output "Tipo: $($login.LoginType)"
+        Write-Output "Banco Padrão: $($login.DefaultDatabase)"
+        Write-Output "Habilitado: $(-not $login.IsDisabled)"
+        Write-Output "Policy: $($login.PasswordPolicyEnforced)"
+        Write-Output "Expiração: $($login.PasswordExpirationEnabled)"
+      register: login_check
+      changed_when: false
+
+    - name: Verificar privilégios no banco principal
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $db = $smo.Databases.Item("{{ sql_database }}")
+        
+        $query = @"
+        SELECT 
+          dp.name AS DatabaseRoleName,
+          mp.name AS DatabaseUserName
+        FROM sys.database_role_members drm
+        JOIN sys.database_principals dp ON dp.principal_id = drm.role_principal_id
+        JOIN sys.database_principals mp ON mp.principal_id = drm.member_principal_id
+        WHERE mp.name = '{{ sql_username }}'
+        "@
+        
+        $results = $db.ExecuteWithResults($query)
+        $results.Tables[0] | ForEach-Object { "$($_.DatabaseRoleName): $($_.DatabaseUserName)" }
+      register: privileges_check
+      changed_when: false
+
+  post_tasks:
+    - name: Confirmar criação e perfil aplicado
+      debug:
+        msg: |
+          ===== USUÁRIO SQL SERVER CRIADO/ATUALIZADO =====
+          Usuário: {{ sql_username }}
+          Status: {{ 'Criado' if login_exists.stdout.strip() == 'NOT_EXISTS' else 'Atualizado' }}
+          Perfil: {{ access_profile }}
+          Instância: {{ sql_instance }}
+          Banco Principal: {{ sql_database }}
+          Schema Principal: {{ sql_schema }}
+          Login Habilitado: {{ login_enabled }}
+          Policy de Senha: {{ password_policy }}
+          Banco Padrão: {{ default_database }}
+          Bancos Adicionais: {{ additional_databases | length }}
+          Schemas Adicionais: {{ additional_schemas | length }}
+
+    - name: Exibir detalhes do login
+      debug:
+        msg: |
+          Detalhes do Login:
+          {{ login_check.stdout }}
+
+    - name: Exibir privilégios concedidos
+      debug:
+        msg: |
+          Privilégios Concedidos:
+          {{ privileges_check.stdout }}
+
+  handlers:
+    - name: restart sql server
+      win_service:
+        name: "MSSQL${{ sql_instance }}"
+        state: restarted

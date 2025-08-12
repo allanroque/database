@@ -1,0 +1,39 @@
+---
+- name: Conceder privilégios no schema adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+    "{% if access_profile == 'readonly' -%}
+       GRANT USAGE ON SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- elif access_profile == 'readwrite' -%}
+       GRANT USAGE, CREATE ON SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- elif access_profile == 'dbadmin' -%}
+       GRANT ALL ON SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- endif %}"
+  changed_when: false
+
+- name: Privilégios nas tabelas do schema adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+    "{% if access_profile == 'readonly' -%}
+       GRANT SELECT ON ALL TABLES IN SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- elif access_profile == 'readwrite' -%}
+       GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- elif access_profile == 'dbadmin' -%}
+       GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- endif %}"
+  changed_when: false
+
+- name: Privilégios nas sequências do schema adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+    "{% if access_profile == 'readonly' -%}
+       GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- elif access_profile == 'readwrite' -%}
+       GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- elif access_profile == 'dbadmin' -%}
+       GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {{ additional_schema.name }} TO {{ db_username }};
+     {%- endif %}"
+  changed_when: false

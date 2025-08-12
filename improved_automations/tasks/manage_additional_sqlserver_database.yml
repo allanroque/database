@@ -1,0 +1,70 @@
+---
+- name: Verificar se o banco adicional existe
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases.Item("{{ additional_db.name }}")
+    if ($db) { Write-Output "EXISTS" } else { Write-Output "NOT_EXISTS" }
+  register: additional_db_exists
+  changed_when: false
+
+- name: Criar usuário no banco adicional
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases.Item("{{ additional_db.name }}")
+    
+    # Verificar se usuário já existe
+    $user = $db.Users.Item("{{ sql_username }}")
+    if (-not $user) {
+      $user = New-Object Microsoft.SqlServer.Management.Smo.User $db, "{{ sql_username }}"
+      $user.Login = "{{ sql_username }}"
+      $user.Create()
+      Write-Output "Usuário {{ sql_username }} criado no banco {{ additional_db.name }}"
+    } else {
+      Write-Output "Usuário {{ sql_username }} já existe no banco {{ additional_db.name }}"
+    }
+  when: additional_db_exists.stdout.strip() == "EXISTS"
+
+- name: Conceder privilégios no banco adicional (perfil)
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases.Item("{{ additional_db.name }}")
+    
+    {% if access_profile == 'readonly' %}
+    # Perfil readonly
+    $db.Roles.Item("db_datareader").AddMember("{{ sql_username }}")
+    Write-Output "Perfil readonly aplicado para {{ sql_username }} no banco {{ additional_db.name }}"
+    {% elif access_profile == 'readwrite' %}
+    # Perfil readwrite
+    $db.Roles.Item("db_datareader").AddMember("{{ sql_username }}")
+    $db.Roles.Item("db_datawriter").AddMember("{{ sql_username }}")
+    Write-Output "Perfil readwrite aplicado para {{ sql_username }} no banco {{ additional_db.name }}"
+    {% elif access_profile == 'dbadmin' %}
+    # Perfil dbadmin
+    $db.Roles.Item("db_owner").AddMember("{{ sql_username }}")
+    Write-Output "Perfil dbadmin aplicado para {{ sql_username }} no banco {{ additional_db.name }}"
+    {% endif %}
+  when: additional_db_exists.stdout.strip() == "EXISTS"
+
+- name: Conceder privilégios no schema do banco adicional
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases.Item("{{ additional_db.name }}")
+    
+    {% if access_profile == 'readonly' %}
+    # Privilégios readonly no schema
+    $query = "GRANT SELECT ON SCHEMA::{{ additional_db.schema | default('dbo') }} TO [{{ sql_username }}]"
+    {% elif access_profile == 'readwrite' %}
+    # Privilégios readwrite no schema
+    $query = "GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::{{ additional_db.schema | default('dbo') }} TO [{{ sql_username }}]"
+    {% elif access_profile == 'dbadmin' %}
+    # Privilégios admin no schema
+    $query = "GRANT CONTROL ON SCHEMA::{{ additional_db.schema | default('dbo') }} TO [{{ sql_username }}]"
+    {% endif %}
+    
+    $db.ExecuteNonQuery($query)
+    Write-Output "Privilégios no schema {{ additional_db.schema | default('dbo') }} concedidos para {{ sql_username }} no banco {{ additional_db.name }}"
+  when: additional_db_exists.stdout.strip() == "EXISTS"
