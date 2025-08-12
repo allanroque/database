@@ -36,6 +36,182 @@
       register: thp_out
       changed_when: false
 
+    # ====== Serviço / versão / dirs ======
+    - name: Serviço PostgreSQL (status + enabled)
+      ansible.builtin.shell: |
+        echo -n "enabled: "; systemctl is-enabled postgresql 2>/dev/null || echo "unknown"
+        echo -n "active:  "; systemctl is-active postgresql 2>/dev/null || echo "unknown"
+      register: svc_out
+      changed_when: false
+
+    - name: Versão do binário
+      ansible.builtin.command: postgres -V
+      register: bin_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Diretórios e ownership
+      ansible.builtin.shell: |
+        echo -n "PGDATA="; echo "${PGDATA:-{{ pg_data_dir }}}"
+        ls -ld /var/lib/pgsql /var/lib/pgsql/data 2>/dev/null || true
+      register: dir_out
+      changed_when: false
+
+    # ====== Rede / portas / firewall / SELinux ======
+    - name: Rede e portas
+      ansible.builtin.shell: |
+        ss -ltnp | grep ':5432 ' || true
+        echo "---"
+        firewall-cmd --list-ports 2>/dev/null || echo "firewalld: n/a"
+        echo -n "SELinux: "; (getenforce 2>/dev/null || echo "n/a")
+      register: net_out
+      changed_when: false
+
+    # ====== Autenticação (hba) ======
+    - name: Caminho do pg_hba.conf
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: psql -tAc "SHOW hba_file;"
+      register: hba_path
+      changed_when: false
+
+    - name: Primeiras 120 linhas do pg_hba.conf
+      ansible.builtin.shell: |
+        H="{{ hba_path.stdout | trim }}"
+        [ -r "$H" ] && sed -n '1,120p' "$H" || echo "pg_hba.conf não legível"
+      register: hba_head
+      changed_when: false
+
+    # ====== Bancos / roles / donos ======
+    - name: Listar bancos e roles + dono do DB alvo
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        echo "-- databases --"
+        psql -tAc "SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname;" || true
+        echo "-- roles --"
+        psql -tAc "SELECT rolname, rolsuper, rolcanlogin FROM pg_roles ORDER BY rolname;" || true
+        echo "-- owner --"
+        psql -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='{{ db_name | default(\"postgres\") }}';" || true
+      register: acc_out
+      changed_when: false
+
+    # ====== Conexões / estados / idle in txn ======
+    - name: Conexões e estados
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        psql -tAc "SHOW max_connections;" || true
+        psql -tAc "SELECT count(*) FROM pg_stat_activity;" || true
+        psql -tAc "SELECT state, count(*) FROM pg_stat_activity GROUP BY state;" || true
+      register: conns_out
+      changed_when: false
+
+    - name: Top 10 idle in transaction
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        psql -F $'\t' -A -c \
+        "SELECT pid, usename, state, wait_event_type, wait_event, now()-xact_start AS xact_age, left(query,80) AS query
+         FROM pg_stat_activity WHERE state='idle in transaction'
+         ORDER BY xact_start NULLS LAST LIMIT 10;" || true
+      register: idle_out
+      changed_when: false
+
+    # ====== Storage / WAL ======
+    - name: Espaço em disco do /var/lib/pgsql
+      ansible.builtin.command: df -h /var/lib/pgsql
+      register: disk_out
+      changed_when: false
+      failed_when: false
+
+    - name: WAL e bgwriter
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        echo "-- wal_level --"
+        psql -tAc "SHOW wal_level;" || true
+        echo "-- bgwriter --"
+        psql -x -c "SELECT checkpoints_timed, checkpoints_req, buffers_checkpoint,
+                           buffers_clean, maxwritten_clean, buffers_backend
+                    FROM pg_stat_bgwriter;" || true
+      register: wal_out
+      changed_when: false
+
+    # ====== Configs-chave ======
+    - name: Parâmetros de configuração (sanidade)
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        psql -tAc "SHOW config_file;" || true
+        psql -tAc "SHOW shared_buffers;" || true
+        psql -tAc "SHOW work_mem;" || true
+        psql -tAc "SHOW maintenance_work_mem;" || true
+        psql -tAc "SHOW effective_cache_size;" || true
+        psql -tAc "SHOW max_wal_size;" || true
+        psql -tAc "SHOW timezone;" || true
+        psql -tAc "SHOW log_min_duration_statement;" || true
+      register: conf_out
+      changed_when: false
+
+    # ====== Logs ======
+    - name: Informações de log (dir/arquivo atual) + erros
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        LOGDIR=$(psql -tAc "SHOW log_directory;" | tr -d ' ')
+        echo "-- log_directory --"
+        echo "$LOGDIR"
+        echo "-- log_filename --"
+        psql -tAc "SHOW log_filename;" || true
+        LAST=$(ls -1t "{{ pg_data_dir }}/$LOGDIR" 2>/dev/null | head -1)
+        echo "-- tail_errors --"
+        tail -n {{ log_tail_lines }} "{{ pg_data_dir }}/$LOGDIR/$LAST" 2>/dev/null | egrep -i "ERROR|FATAL|PANIC" || true
+      register: logs_out
+      changed_when: false
+
+    # ====== Extensões / Schemas / Tabelas / Replicação ======
+    - name: Extensões e schemas do DB alvo
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        DB="{{ db_name | default('postgres') }}"
+        echo "-- extensions --"
+        psql -d "$DB" -tAc "SELECT extname, extversion FROM pg_extension;" || true
+        echo "-- schemas --"
+        psql -d "$DB" -tAc "SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema' ORDER BY 1;" || true
+      register: exts_out
+      changed_when: false
+
+    - name: Privilegios em schema (public)
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        DB="{{ db_name | default('postgres') }}"
+        SCHEMA="{{ schema_name | default('public') }}"
+        psql -d "$DB" -x -c "SELECT nspname, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname='$SCHEMA';" || true
+        psql -d "$DB" -c "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema='$SCHEMA' ORDER BY 1,2 LIMIT 20;" || true
+      register: schema_out
+      changed_when: false
+
+    - name: Replicação e tabelas quentes
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: |
+        DB="{{ db_name | default('postgres') }}"
+        echo "-- recovery? --"
+        psql -tAc "SELECT pg_is_in_recovery();" || true
+        echo "-- replicas --"
+        psql -x -c "SELECT client_addr, state, sync_state, write_lag, flush_lag, replay_lag FROM pg_stat_replication;" || true
+        echo "-- hot tables --"
+        psql -d "$DB" -x -c \
+        "SELECT relname, seq_scan, idx_scan, n_tup_ins, n_tup_upd, n_tup_del
+         FROM pg_stat_user_tables
+         ORDER BY (n_tup_ins+n_tup_upd+n_tup_del) DESC NULLS LAST LIMIT 10;" || true
+        echo "-- vacuum/analyze --"
+        psql -d "$DB" -x -c \
+        "SELECT relname, last_vacuum, last_autovacuum, last_analyze, last_autoanalyze
+         FROM pg_stat_user_tables ORDER BY last_autovacuum NULLS FIRST LIMIT 10;" || true
+      register: repl_hot_out
+      changed_when: false
+
+    # ====== DNS (extra) ======
+    - name: DNS/resolv
+      ansible.builtin.shell: |
+        grep -E '^(nameserver|search|domain)' /etc/resolv.conf 2>/dev/null || echo "resolv.conf n/a"
+      register: dns_out
+      changed_when: false
+
     # ====== PostgreSQL ======
     - name: Postgres básico (via socket)
       become_user: "{{ pg_user }}"
@@ -80,7 +256,6 @@
           host: "{{ inventory_hostname }}"
           os:
             distro: "{{ (ansible_facts.distribution | default(ansible_distribution)) ~ ' ' ~ (ansible_facts.distribution_version | default(ansible_distribution_version)) }}"
-            # 'kernel' (ex.: Linux) + release (use ansible_kernel como fallback)
             kernel: "{{ (ansible_facts.kernel | default(ansible_system)) ~ ' ' ~ (ansible_facts.kernel_release | default(ansible_kernel)) }}"
             arch: "{{ ansible_facts.architecture | default(ansible_architecture) }}"
             uptime: "{{ uptime_h }}"
@@ -89,10 +264,26 @@
             mounts: "{{ (ansible_facts.mounts | default([])) | map(attribute='mount') | list }}"
             sysctl_sample: "{{ sysctl_out.stdout_lines | default([]) }}"
             thp: "{{ thp_out.stdout | default('') }}"
+            dns: "{{ dns_out.stdout | default('') }}"
+          service:
+            status: "{{ svc_out.stdout | default('') }}"
+            bin_version: "{{ bin_ver.stdout | default('') }}"
+            dirs: "{{ dir_out.stdout | default('') }}"
+            network: "{{ net_out.stdout | default('') }}"
           postgres:
             basics: "{{ psql_basic.stdout | default('') }}"
+            configs: "{{ conf_out.stdout | default('') }}"
+            hba_head: "{{ hba_head.stdout | default('') }}"
+            accounts: "{{ acc_out.stdout | default('') }}"
+            connections: "{{ conns_out.stdout | default('') }}"
+            idle_in_txn: "{{ idle_out.stdout | default('') }}"
             db_sizes: "{{ db_sizes.stdout | default('') }}"
-            recent_errors: "{{ log_errs.stdout | default('') }}"
+            disk: "{{ disk_out.stdout | default('') }}"
+            wal: "{{ wal_out.stdout | default('') }}"
+            logs: "{{ logs_out.stdout | default('') }}"
+            extensions_schemas: "{{ exts_out.stdout | default('') }}"
+            schema_details: "{{ schema_out.stdout | default('') }}"
+            replication_hot: "{{ repl_hot_out.stdout | default('') }}"
 
     # ====== Web (Apache + templates) ======
     - name: Instalar Apache (httpd)
@@ -143,5 +334,5 @@
     - name: reload apache
       ansible.builtin.service:
         name: httpd
-        state: reloaded
+        state: restarted
 

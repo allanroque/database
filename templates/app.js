@@ -1,78 +1,107 @@
 async function loadJSON(url){
-  const res = await fetch(url, {cache: "no-store"});
+  const res = await fetch(url, {cache:"no-store"});
   if(!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
-function addRow(tbody, k, v){
+function setText(id, txt){
+  const el = document.getElementById(id);
+  if(el) el.textContent = (txt ?? "—");
+}
+
+function setPre(id, txt){
+  const el = document.getElementById(id);
+  if(el) el.textContent = (txt && String(txt).trim().length ? txt : "—");
+}
+
+function addRow(tbodyId, k, v){
+  const tb = document.getElementById(tbodyId);
+  if(!tb) return;
   const tr = document.createElement("tr");
   const td1 = document.createElement("td"); td1.textContent = k;
-  const td2 = document.createElement("td"); td2.textContent = v ?? "—";
-  tr.append(td1, td2);
-  tbody.appendChild(tr);
+  const td2 = document.createElement("td"); td2.textContent = (v ?? "—");
+  tr.append(td1, td2); tb.appendChild(tr);
 }
 
-function parseKVBlock(text){
-  // psql_basic saiu como string com linhas, vamos extrair pares-chave simples quando possível
+function parseBasicsBlock(text){
   if(!text) return {};
-  // não vamos tentar parsear tudo; só destacamos linhas úteis
   const lines = String(text).split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  const guess = {};
-  lines.forEach(l=>{
-    if(l.startsWith("PostgreSQL")) guess.version = l;
-    else if(l === "localhost") guess.listen = l;
-    else if(/^\d{4,5}$/.test(l)) guess.port = l;
-    else if(l.includes("postgresql.conf")) guess.config_file = l;
-    else if(l.includes("pg_hba.conf")) guess.hba_file = l;
-    else if(/^\d+$/.test(l)) guess.connections = l;
-  });
-  return guess;
+  const out = {};
+  for(const l of lines){
+    if(l.startsWith("PostgreSQL")) out.version = l;
+    else if(l === "localhost") out.listen = l;
+    else if(/^\d{4,5}$/.test(l)) out.port = l;
+    else if(l.includes("postgresql.conf")) out.config_file = l;
+    else if(l.includes("pg_hba.conf")) out.hba_file = l;
+    else if(/^\d+$/.test(l)) out.connections = l;
+  }
+  return out;
 }
-
-function setText(id, txt){ const el=document.getElementById(id); if(el) el.textContent = txt; }
-
-function setPre(id, txt){ const el=document.getElementById(id); if(el) el.textContent = txt || "—"; }
 
 (async ()=>{
   try{
     const data = await loadJSON("health.json");
 
     // Header
-    setText("host", data.host || "—");
-    setText("collected", data.collected_at || "—");
+    setText("host", data.host);
+    setText("collected", data.collected_at);
+    setText("collected-hero", data.collected_at);
 
-    // CORE (SO)
-    const oskv = document.getElementById("os-kv");
-    addRow(oskv, "OS", data.os?.distro);
-    addRow(oskv, "Kernel", data.os?.kernel);
-    addRow(oskv, "Arch", data.os?.arch);
-    addRow(oskv, "Uptime", data.os?.uptime);
-    addRow(oskv, "vCPUs", data.os?.cpu_vcpus);
-    addRow(oskv, "Memória (MB)", data.os?.mem_mb);
+    // CORE
+    addRow("os-kv", "OS", data.os?.distro);
+    addRow("os-kv", "Kernel", data.os?.kernel);
+    addRow("os-kv", "Arch", data.os?.arch);
+    addRow("os-kv", "Uptime", data.os?.uptime);
+    addRow("os-kv", "vCPUs", data.os?.cpu_vcpus);
+    addRow("os-kv", "Memória (MB)", data.os?.mem_mb);
 
-    const osextra = document.getElementById("os-extra");
-    addRow(osextra, "Mounts", (data.os?.mounts||[]).join(", "));
-    addRow(osextra, "THP", data.os?.thp?.toString().replace(/\n/g,"  "));
-    (data.os?.sysctl_sample||[]).forEach((v,i)=> addRow(osextra, `sysctl#${i+1}`, v));
+    addRow("os-extra", "Mounts", (data.os?.mounts||[]).join(", "));
+    addRow("os-extra", "THP", (data.os?.thp||"").toString().replace(/\n/g,"  "));
+    (data.os?.sysctl_sample||[]).forEach((v,i)=> addRow("os-extra", `sysctl#${i+1}`, v));
+    setPre("dns-info", data.os?.dns);
 
-    // DATABASE (básico + atividade)
-    const basics = parseKVBlock(data.postgres?.basics);
-    const dbBasics = document.getElementById("db-basics");
-    addRow(dbBasics, "Versão", basics.version);
-    addRow(dbBasics, "Listen", basics.listen);
-    addRow(dbBasics, "Porta", basics.port);
-    addRow(dbBasics, "postgresql.conf", basics.config_file);
-    addRow(dbBasics, "pg_hba.conf", basics.hba_file);
+    // SERVICE & VERSION
+    setPre("svc-status", data.service?.status);
+    setPre("svc-bin", data.service?.bin_version);
+    setPre("svc-dirs", data.service?.dirs);
 
-    const dbAct = document.getElementById("db-activity");
-    addRow(dbAct, "Conexões", basics.connections);
-    // você pode somar estados a partir de outro bloco se quiser: data.postgres.accounts
+    // NETWORK
+    setPre("net-info", data.service?.network);
 
-    // SIZES / WAL / LOGS / RAW
+    // AUTH
+    setPre("hba-head", data.postgres?.hba_head);
+
+    // DB BASICS & ACTIVITY
+    const basics = parseBasicsBlock(data.postgres?.basics);
+    addRow("db-basics", "Versão", basics.version);
+    addRow("db-basics", "Listen", basics.listen);
+    addRow("db-basics", "Porta", basics.port);
+    addRow("db-basics", "postgresql.conf", basics.config_file);
+    addRow("db-basics", "pg_hba.conf", basics.hba_file);
+
+    addRow("db-activity", "Conexões (psql_basic)", basics.connections);
+    setPre("pg-configs", data.postgres?.configs);
+
+    // ACCESS
+    setPre("pg-accounts", data.postgres?.accounts);
+
+    // CONNECTIONS
+    setPre("pg-conns", data.postgres?.connections);
+    setPre("pg-idle", data.postgres?.idle_in_txn);
+
+    // STORAGE / WAL
     setPre("db-sizes", data.postgres?.db_sizes);
-    // Se você incluir bgwriter/params no JSON, injete aqui. Se não, deixamos vazio.
-    setPre("wal-info", "Use o playbook para adicionar bgwriter/params se quiser.");
-    setPre("db-logs", data.postgres?.recent_errors);
+    setPre("pg-disk", data.postgres?.disk);
+    setPre("pg-wal", data.postgres?.wal);
+
+    // SCHEMAS / EXTENSIONS
+    setPre("pg-ext", data.postgres?.extensions_schemas);
+    setPre("pg-schema", data.postgres?.schema_details);
+
+    // REPLICATION / HOT TABLES
+    setPre("pg-repl", data.postgres?.replication_hot);
+
+    // RAW JSON
     setPre("raw-json", JSON.stringify(data, null, 2));
   }catch(err){
     setPre("raw-json", "Falha ao carregar health.json: " + err.message);
