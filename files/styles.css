@@ -73,5 +73,5 @@ body{margin:0; color:var(--text); background:var(--bg);
 /* Mobile trims */
 @media (max-width:480px){
   .kv td{padding:6px 8px}
-  .kv td:first-child{width:160px}
+  .kv td:first-child{width:100%}
 }
