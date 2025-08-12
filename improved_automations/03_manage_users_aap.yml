@@ -1,0 +1,246 @@
+---
+- name: Gerenciamento de Usuários PostgreSQL (AAP Compatible)
+  hosts: db_servers
+  become: true
+
+  vars:
+    # ===== VARIÁVEIS DO SURVEY AAP =====
+    # Configurações básicas
+    db_name: "{{ target_database | default('postgres') }}"
+    schema_name: "{{ target_schema | default('public') }}"
+    db_username: "{{ username }}"
+    db_user_password: "{{ user_password }}"
+    access_profile: "{{ profile | default('readonly') }}"   # readonly | readwrite | dbadmin
+
+    # Configurações de hardening
+    role_conn_limit: "{{ conn_limit | default(10) }}"
+    role_stmt_timeout: "{{ stmt_timeout | default('5min') }}"
+    role_valid_until: "{{ valid_until | default('infinity') }}"
+    role_search_path: "{{ search_path | default('public') }}"
+
+    # Configurações opcionais
+    create_user_only: "{{ create_user_only | default(false) }}"
+    update_existing: "{{ update_existing | default(true) }}"
+    add_comment: "{{ add_comment | default('') }}"
+
+    # Configurações de múltiplos bancos/schemas (se necessário)
+    additional_databases: "{{ additional_databases | default([]) }}"
+    additional_schemas: "{{ additional_schemas | default([]) }}"
+
+  pre_tasks:
+    - name: Validar variáveis obrigatórias
+      assert:
+        that:
+          - db_username is defined
+          - db_user_password is defined
+          - db_name is defined
+          - access_profile in ['readonly', 'readwrite', 'dbadmin']
+        fail_msg: "Variáveis obrigatórias não definidas ou perfil inválido"
+
+    - name: Verificar conectividade com PostgreSQL
+      become_user: postgres
+      ansible.builtin.command: psql -tAc "SELECT 1;"
+      register: pg_connectivity
+      failed_when: false
+
+    - name: Falhar se PostgreSQL não estiver acessível
+      ansible.builtin.fail:
+        msg: "PostgreSQL não está acessível. Verifique se o serviço está rodando."
+      when: pg_connectivity.rc != 0
+
+  tasks:
+    - name: Verificar se o usuário já existe
+      become_user: postgres
+      ansible.builtin.command: >
+        psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='{{ db_username }}';"
+      register: user_exists
+      changed_when: false
+
+    - name: Criar usuário com senha (se não existir)
+      become_user: postgres
+      no_log: true
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -c
+        "CREATE ROLE {{ db_username }} WITH LOGIN PASSWORD '{{ db_user_password }}'
+         NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT CONNECTION LIMIT {{ role_conn_limit }} VALID UNTIL '{{ role_valid_until }}';"
+      when: 
+        - user_exists.stdout.strip() | length == 0
+        - not create_user_only | bool
+
+    - name: Atualizar senha do usuário existente (se solicitado)
+      become_user: postgres
+      no_log: true
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -c
+        "ALTER ROLE {{ db_username }} WITH PASSWORD '{{ db_user_password }}'
+         CONNECTION LIMIT {{ role_conn_limit }} VALID UNTIL '{{ role_valid_until }}';"
+      when: 
+        - user_exists.stdout.strip() | length > 0
+        - update_existing | bool
+
+    - name: Configurar parâmetros de sessão do usuário
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -c
+        "ALTER ROLE {{ db_username }}
+           SET search_path TO {{ role_search_path }};
+         ALTER ROLE {{ db_username }}
+           SET statement_timeout TO '{{ role_stmt_timeout }}';"
+      changed_when: false
+
+    - name: Adicionar comentário ao usuário (se especificado)
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -c
+        "COMMENT ON ROLE {{ db_username }} IS '{{ add_comment }}';"
+      when: add_comment | length > 0
+      changed_when: false
+
+    # ===== CONCESSÕES NO BANCO PRINCIPAL =====
+    - name: Garantir CONNECT no banco principal
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+        "GRANT CONNECT ON DATABASE {{ db_name }} TO {{ db_username }};"
+      changed_when: false
+
+    - name: Conceder privilégios no schema principal (perfil)
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+        "{% if access_profile == 'readonly' -%}
+           GRANT USAGE ON SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- elif access_profile == 'readwrite' -%}
+           GRANT USAGE, CREATE ON SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- elif access_profile == 'dbadmin' -%}
+           GRANT ALL ON SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- endif %}"
+      changed_when: false
+
+    - name: Privilégios nas TABELAS existentes (schema principal)
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+        "{% if access_profile == 'readonly' -%}
+           GRANT SELECT ON ALL TABLES IN SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- elif access_profile == 'readwrite' -%}
+           GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- elif access_profile == 'dbadmin' -%}
+           GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- endif %}"
+      changed_when: false
+
+    - name: Privilégios nas SEQUÊNCIAS existentes (schema principal)
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+        "{% if access_profile == 'readonly' -%}
+           GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- elif access_profile == 'readwrite' -%}
+           GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- elif access_profile == 'dbadmin' -%}
+           GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {{ schema_name }} TO {{ db_username }};
+         {%- endif %}"
+      changed_when: false
+
+    - name: Default Privileges para futuros objetos - TABELAS (schema principal)
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+        "{% if access_profile == 'readonly' -%}
+           ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_name }}
+             GRANT SELECT ON TABLES TO {{ db_username }};
+         {%- elif access_profile == 'readwrite' -%}
+           ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_name }}
+             GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {{ db_username }};
+         {%- elif access_profile == 'dbadmin' -%}
+           ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_name }}
+             GRANT ALL PRIVILEGES ON TABLES TO {{ db_username }};
+         {%- endif %}"
+      changed_when: false
+
+    - name: Default Privileges para futuros objetos - SEQUÊNCIAS (schema principal)
+      become_user: postgres
+      ansible.builtin.shell: >
+        psql -v ON_ERROR_STOP=1 -d {{ db_name }} -c
+        "{% if access_profile == 'readonly' -%}
+           ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_name }}
+             GRANT USAGE, SELECT ON SEQUENCES TO {{ db_username }};
+         {%- elif access_profile == 'readwrite' -%}
+           ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_name }}
+             GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO {{ db_username }};
+         {%- elif access_profile == 'dbadmin' -%}
+           ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_name }}
+             GRANT ALL PRIVILEGES ON SEQUENCES TO {{ db_username }};
+         {%- endif %}"
+      changed_when: false
+
+    # ===== CONCESSÕES EM BANCOS ADICIONAIS =====
+    - name: Processar bancos adicionais
+      include_tasks: tasks/manage_additional_database.yml
+      loop: "{{ additional_databases }}"
+      loop_control:
+        loop_var: additional_db
+      when: additional_databases | length > 0
+
+    # ===== CONCESSÕES EM SCHEMAS ADICIONAIS =====
+    - name: Processar schemas adicionais
+      include_tasks: tasks/manage_additional_schema.yml
+      loop: "{{ additional_schemas }}"
+      loop_control:
+        loop_var: additional_schema
+      when: additional_schemas | length > 0
+
+    - name: Verificar usuário criado/atualizado
+      become_user: postgres
+      ansible.builtin.command: >
+        psql -tAc "SELECT rolname, rolcanlogin, rolconnlimit, rolvaliduntil 
+                   FROM pg_roles 
+                   WHERE rolname='{{ db_username }}';"
+      register: user_check
+      changed_when: false
+
+    - name: Verificar privilégios no banco principal
+      become_user: postgres
+      ansible.builtin.command: >
+        psql -d {{ db_name }} -tAc 
+        "SELECT grantee, privilege_type, table_name 
+         FROM information_schema.role_table_grants 
+         WHERE grantee='{{ db_username }}' AND table_schema='{{ schema_name }}'
+         LIMIT 5;"
+      register: privileges_check
+      changed_when: false
+
+  post_tasks:
+    - name: Confirmar criação e perfil aplicado
+      ansible.builtin.debug:
+        msg: |
+          ===== USUÁRIO POSTGRESQL CRIADO/ATUALIZADO =====
+          Usuário: {{ db_username }}
+          Status: {{ 'Criado' if user_exists.stdout.strip() | length == 0 else 'Atualizado' }}
+          Perfil: {{ access_profile }}
+          Banco Principal: {{ db_name }}
+          Schema Principal: {{ schema_name }}
+          Connection Limit: {{ role_conn_limit }}
+          Statement Timeout: {{ role_stmt_timeout }}
+          Valid Until: {{ role_valid_until }}
+          Bancos Adicionais: {{ additional_databases | length }}
+          Schemas Adicionais: {{ additional_schemas | length }}
+
+    - name: Exibir detalhes do usuário
+      ansible.builtin.debug:
+        msg: |
+          Detalhes do Usuário:
+          {{ user_check.stdout }}
+
+    - name: Exibir privilégios concedidos
+      ansible.builtin.debug:
+        msg: |
+          Privilégios Concedidos (amostra):
+          {{ privileges_check.stdout }}
+
+  handlers:
+    - name: reload postgresql
+      ansible.builtin.systemd:
+        name: postgresql
+        state: reloaded

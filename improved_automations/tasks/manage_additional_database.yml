@@ -1,0 +1,46 @@
+---
+- name: Garantir CONNECT no banco adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ additional_db.name }} -c
+    "GRANT CONNECT ON DATABASE {{ additional_db.name }} TO {{ db_username }};"
+  changed_when: false
+
+- name: Conceder privilégios no schema do banco adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ additional_db.name }} -c
+    "{% if access_profile == 'readonly' -%}
+       GRANT USAGE ON SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- elif access_profile == 'readwrite' -%}
+       GRANT USAGE, CREATE ON SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- elif access_profile == 'dbadmin' -%}
+       GRANT ALL ON SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- endif %}"
+  changed_when: false
+
+- name: Privilégios nas tabelas do banco adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ additional_db.name }} -c
+    "{% if access_profile == 'readonly' -%}
+       GRANT SELECT ON ALL TABLES IN SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- elif access_profile == 'readwrite' -%}
+       GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- elif access_profile == 'dbadmin' -%}
+       GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- endif %}"
+  changed_when: false
+
+- name: Privilégios nas sequências do banco adicional
+  become_user: postgres
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ additional_db.name }} -c
+    "{% if access_profile == 'readonly' -%}
+       GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- elif access_profile == 'readwrite' -%}
+       GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- elif access_profile == 'dbadmin' -%}
+       GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA {{ additional_db.schema | default('public') }} TO {{ db_username }};
+     {%- endif %}"
+  changed_when: false

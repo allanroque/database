@@ -1,0 +1,46 @@
+;SQL Server Configuration File
+[OPTIONS]
+
+; SQL Server Edition
+IACCEPTSQLSERVERLICENSETERMS = True
+
+; Instance Configuration
+SQLSYSADMINACCOUNTS = {{ sql_service_account | default('NT AUTHORITY\\SYSTEM') }}
+SQLSVCACCOUNT = {{ sql_service_account | default('NT AUTHORITY\\SYSTEM') }}
+SQLAGTSVCACCOUNT = {{ sql_agent_service_account | default('NT AUTHORITY\\NETWORK SERVICE') }}
+
+; Database Engine Configuration
+SQLCOLLATION = {{ sql_collation | default('SQL_Latin1_General_CP1_CI_AS') }}
+SQLSVCINSTANTFILEINIT = True
+
+; Data Directories
+SQLUSERDBDIR = {{ sql_data_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA') }}
+SQLUSERDBLOGDIR = {{ sql_log_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA') }}
+SQLBACKUPDIR = {{ sql_backup_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\Backup') }}
+SQLTEMPDBDIR = {{ sql_tempdb_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA') }}
+SQLTEMPDBLOGDIR = {{ sql_tempdb_log_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA') }}
+
+; Security Configuration
+SECURITYMODE = {{ 'SQL' if sql_authentication_mode == 'Mixed' else 'Windows' }}
+SAPWD = {{ sql_sa_password | default('ChangeMe123!') }}
+
+; Network Configuration
+TCPENABLED = {{ '1' if sql_tcp_enabled else '0' }}
+NPENABLED = {{ '1' if sql_named_pipes_enabled else '0' }}
+
+; Feature Selection
+FEATURES = SQLENGINE,REPLICATION,SNAC_SDK
+
+; Instance Name
+INSTANCENAME = {{ sql_server_instance | default('MSSQLSERVER') }}
+
+; Performance Configuration
+SQLMAXMEMORY = {{ sql_max_memory | default('2048') }}
+SQLMINMEMORY = {{ sql_min_memory | default('512') }}
+
+; Error Reporting
+ERRORREPORTING = False
+SQMREPORTING = False
+
+; Telemetry
+TELEMETRY = False
