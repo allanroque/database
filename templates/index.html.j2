@@ -4,41 +4,30 @@
   <meta charset="utf-8" />
   <title>PG Health — {{ report.host }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="styles.css?v=7" />
-  <script defer src="app.js?v=7"></script>
+  <link rel="stylesheet" href="styles.css?v=8" />
+  <script defer src="app.js?v=8"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">PG Health</div>
     <nav class="nav">
-      <a href="#core">Core</a>
-      <a href="#service">Service</a>
-      <a href="#network">Network</a>
-      <a href="#auth">Auth</a>
-      <a href="#db">DB</a>
-      <a href="#access">Access</a>
-      <a href="#conn">Conn</a>
-      <a href="#storage">Storage/WAL</a>
-      <a href="#schema">Schemas</a>
-      <a href="#repl">Repl</a>
-      <a href="#logs">Logs</a>
+      <a href="#core">Core</a><a href="#service">Service</a><a href="#network">Network</a>
+      <a href="#auth">Auth</a><a href="#db">DB</a><a href="#access">Access</a>
+      <a href="#conn">Conn</a><a href="#storage">Storage/WAL</a>
+      <a href="#schema">Schemas</a><a href="#repl">Repl</a><a href="#logs">Logs</a>
     </nav>
-    <div class="meta">
-      <span id="host">—</span><span class="dot"></span><span id="collected">—</span>
-    </div>
+    <div class="meta"><span id="host">—</span><span class="dot"></span><span id="collected">—</span></div>
   </header>
 
   <main class="wrap">
     <section class="hero">
-      <h1>{{ report.host }}</h1>
+      <h1 id="hero-host">{{ report.host }}</h1>
       <p>Coletado em <span id="collected-hero">{{ report.collected_at }}</span></p>
     </section>
 
     <!-- CORE -->
     <section id="core" class="card">
-      <div class="card__head">
-        <h2>Core (SO)</h2><span class="badge">Overview</span>
-      </div>
+      <div class="card__head"><h2>Core (SO)</h2><span class="badge">Overview</span></div>
       <div class="grid-2">
         <table class="kv"><tbody id="os-kv"></tbody></table>
         <table class="kv"><tbody id="os-extra"></tbody></table>
@@ -49,22 +38,11 @@
 
     <!-- SERVICE & VERSION -->
     <section id="service" class="card">
-      <div class="card__head">
-        <h2>Service & Version</h2><span class="badge accent">PostgreSQL</span>
-      </div>
+      <div class="card__head"><h2>Service & Version</h2><span class="badge accent">PostgreSQL</span></div>
       <div class="grid-3">
-        <div>
-          <div class="hint">Status</div>
-          <pre id="svc-status" class="codeblock small">—</pre>
-        </div>
-        <div>
-          <div class="hint">Binary Version</div>
-          <pre id="svc-bin" class="codeblock small">—</pre>
-        </div>
-        <div>
-          <div class="hint">Dirs & Ownership</div>
-          <pre id="svc-dirs" class="codeblock small">—</pre>
-        </div>
+        <div><div class="hint">Status</div><pre id="svc-status" class="codeblock small">—</pre></div>
+        <div><div class="hint">Binary Version</div><pre id="svc-bin" class="codeblock small">—</pre></div>
+        <div><div class="hint">Dirs & Ownership</div><pre id="svc-dirs" class="codeblock small">—</pre></div>
       </div>
     </section>
 
@@ -109,14 +87,8 @@
     <section id="storage" class="card">
       <div class="card__head"><h2>Storage & WAL</h2><span class="badge">Sizes</span></div>
       <div class="grid-2">
-        <div>
-          <div class="hint">Tamanho por DB</div>
-          <pre id="db-sizes" class="codeblock">—</pre>
-        </div>
-        <div>
-          <div class="hint">Filesystem (data dir)</div>
-          <pre id="pg-disk" class="codeblock">—</pre>
-        </div>
+        <div><div class="hint">Tamanho por DB</div><pre id="db-sizes" class="codeblock">—</pre></div>
+        <div><div class="hint">Filesystem (data dir)</div><pre id="pg-disk" class="codeblock">—</pre></div>
       </div>
       <div class="hint">WAL & Checkpoints</div>
       <pre id="pg-wal" class="codeblock small">—</pre>
@@ -145,8 +117,7 @@
     <!-- RAW JSON -->
     <section id="raw" class="card">
       <div class="card__head">
-        <h2>JSON cru</h2>
-        <a class="link" href="health.json" target="_blank" rel="noreferrer">/pg-health/health.json</a>
+        <h2>JSON cru</h2><a class="link" href="health.json" target="_blank" rel="noreferrer">/pg-health/health.json</a>
       </div>
       <details>
         <summary>Mostrar/ocultar JSON</summary>
@@ -155,8 +126,6 @@
     </section>
   </main>
 
-  <footer class="foot">
-    <span>Gerado por Ansible • Página local</span>
-  </footer>
+  <footer class="foot"><span>Gerado por Ansible • Página local</span></footer>
 </body>
 </html>
