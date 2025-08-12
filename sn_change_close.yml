@@ -26,7 +26,3 @@
         other:
           work_notes: "{{ sn_close_notes }}"
       register: closed_change
-
-    - set_stats:
-        data:
-          sn_change_number: "{{ closed_change.record.number }}"

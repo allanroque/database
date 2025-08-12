@@ -26,4 +26,6 @@
         category: "{{ sn_category }}"
       register: new_change_request
 
-  
+    - set_stats:
+        data:
+          sn_change_number: "{{ new_change_request.record.number }}"
