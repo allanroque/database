@@ -2,81 +2,101 @@
 <html lang="pt-br">
 <head>
   <meta charset="utf-8" />
-  <title>PG Health — {{ report.host }}</title>
+  <title>PG Health — {{ report.host if report is defined else '' }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="style.css?v=1" />
-  <script defer src="script.js"></script>
+  <link rel="stylesheet" href="styles.css?v=1" />
+  <script defer src="app.js"></script>
 </head>
 <body>
-  <header>
-    <h1>PG Health</h1>
-    <ul class="nav-links">
-      <li><a href="#so">SO</a></li>
-      <li><a href="#pg">PostgreSQL</a></li>
-      <li><a href="#sizes">Tamanho por DB</a></li>
-      <li><a href="#logs">Logs</a></li>
-    </ul>
+  <header class="topbar">
+    <div class="brand">PG Health</div>
+    <div class="meta">
+      <span id="host">—</span>
+      <span class="dot"></span>
+      <span id="collected">—</span>
+    </div>
   </header>
 
-  <section class="hero-section">
-    <h2>{{ report.host }}</h2>
-    <p>Coletado em {{ report.collected_at }}</p>
-  </section>
-
-  <div class="container">
-    <main>
-      <div id="so" class="card">
-        <h3>SO</h3>
-        <p><b>Distro:</b> {{ report.os.distro }}</p>
-        <p><b>Kernel:</b> {{ report.os.kernel }}</p>
-        <p><b>Arch:</b> {{ report.os.arch }}</p>
-        <p><b>Uptime:</b> {{ report.os.uptime }}</p>
-        <p><b>Memória:</b> {{ report.os.mem_mb }} MB &nbsp; <b>vCPUs:</b> {{ report.os.cpu_vcpus }}</p>
-        <p><b>Mounts:</b> {{ report.os.mounts|join(', ') }}</p>
+  <main class="wrap">
+    <!-- CORE (SO) -->
+    <section class="card">
+      <div class="card__head">
+        <h3>Core</h3>
+        <div class="badge" id="core-status">SO</div>
       </div>
-
-      <div id="pg" class="card">
-        <h3>PostgreSQL (básico)</h3>
-        <pre>{{ report.postgres.basics }}</pre>
+      <div class="grid-2">
+        <table class="kv">
+          <tbody id="os-kv">
+            <!-- preenchido via JS -->
+          </tbody>
+        </table>
+        <table class="kv">
+          <tbody id="os-extra">
+            <!-- mounts e afins -->
+          </tbody>
+        </table>
       </div>
+    </section>
 
-      <div id="sizes" class="card">
+    <!-- DATABASE (substitui “Hardware/Drives”) -->
+    <section class="card">
+      <div class="card__head">
+        <h3>Database</h3>
+        <div class="badge accent">PostgreSQL</div>
+      </div>
+      <div class="grid-2">
+        <table class="kv">
+          <tbody id="db-basics">
+            <!-- versão, listen, porta, confs -->
+          </tbody>
+        </table>
+        <table class="kv">
+          <tbody id="db-activity">
+            <!-- conexões, estados, etc -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TAMANHOS POR DB -->
+    <section class="card">
+      <div class="card__head">
         <h3>Tamanho por DB</h3>
-        <pre>{{ report.postgres.db_sizes }}</pre>
+        <div class="badge">Storage</div>
       </div>
+      <pre id="db-sizes" class="codeblock">carregando…</pre>
+    </section>
 
-      <div id="logs" class="card">
+    <!-- WAL / CHECKPOINTS -->
+    <section class="card">
+      <div class="card__head">
+        <h3>WAL & Checkpoints</h3>
+        <div class="badge">WAL</div>
+      </div>
+      <pre id="wal-info" class="codeblock">carregando…</pre>
+    </section>
+
+    <!-- LOGS RECENTES -->
+    <section class="card">
+      <div class="card__head">
         <h3>Erros recentes (log)</h3>
-        <pre>{{ report.postgres.recent_errors or 'Sem erros recentes.' }}</pre>
+        <div class="badge warn">Logs</div>
       </div>
+      <pre id="db-logs" class="codeblock">carregando…</pre>
+    </section>
 
-      <div class="card">
+    <!-- JSON BRUTO -->
+    <section class="card">
+      <div class="card__head">
         <h3>JSON cru</h3>
-        <p>Disponível em <code>/pg-health/health.json</code></p>
-        <pre>{{ report | to_nice_json }}</pre>
+        <a class="link" href="health.json" target="_blank" rel="noreferrer">/pg-health/health.json</a>
       </div>
-    </main>
+      <pre id="raw-json" class="codeblock small">carregando…</pre>
+    </section>
+  </main>
 
-    <aside>
-      <h3>Atalhos</h3>
-      <ul id="playlist">
-        <li onclick="location.href='#so'">Sistema Operacional</li>
-        <li onclick="location.href='#pg'">Parâmetros PG</li>
-        <li onclick="location.href='#sizes'">Tamanhos</li>
-        <li onclick="location.href='#logs'">Logs</li>
-      </ul>
-
-      <div class="ad-block">
-        <p><b>Status rápido</b></p>
-        <p><span class="pill ok"></span> serviço ativo</p>
-        <p><span class="pill warn"></span> verifique autenticação</p>
-      </div>
-    </aside>
-  </div>
-
-  <footer>
-    <p>PG Health Lab • gerado por Ansible</p>
+  <footer class="foot">
+    <span>Gerado por Ansible • Página local</span>
   </footer>
 </body>
 </html>
-

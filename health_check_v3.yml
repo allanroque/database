@@ -121,8 +121,8 @@
 
     - name: Publicar script.js (opcional)
       ansible.builtin.copy:
-        src: "templates/script.js"
-        dest: "{{ web_root }}/script.js"
+        src: "templates/app.js"
+        dest: "{{ web_root }}/app.js"
         mode: "0644"
       notify: reload apache
 
