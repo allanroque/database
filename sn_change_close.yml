@@ -9,7 +9,7 @@
     snow_password: "{{ snow_password }}"
 
     sn_change_number: "{{ sn_change_number }}"
-    sn_close_code:   "{{ sn_close_code | default('Successful') }}"
+    sn_close_code:   "{{ sn_close_code | default('successful') }}"
     sn_close_notes:  "{{ sn_close_notes | default('Closed by Ansible') }}"
 
   tasks:
