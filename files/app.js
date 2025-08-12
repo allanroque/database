@@ -23,6 +23,7 @@ function addRow(tbodyId, k, v){
   tr.append(td1, td2); tb.appendChild(tr);
 }
 
+// Parse do bloco "basics" gerado pelo play (linhas simples)
 function parseBasicsBlock(text){
   if(!text) return {};
   const lines = String(text).split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
@@ -56,8 +57,19 @@ function parseBasicsBlock(text){
     addRow("os-kv", "Memória (MB)", data.os?.mem_mb);
 
     addRow("os-extra", "Mounts", (data.os?.mounts||[]).join(", "));
+
+    // THP em linha única
     addRow("os-extra", "THP", (data.os?.thp||"").toString().replace(/\n/g,"  "));
-    (data.os?.sysctl_sample||[]).forEach((v,i)=> addRow("os-extra", `sysctl#${i+1}`, v));
+
+    // sysctl: cada linha "chave=valor"
+    const sys = data.os?.sysctl_sample || [];
+    sys.forEach((line, i) => {
+      const s = (line || "").toString().trim();
+      if(!s) return;
+      const [k, v] = s.includes("=") ? s.split("=", 2) : [`sysctl#${i+1}`, s];
+      addRow("os-extra", k, v);
+    });
+
     setPre("dns-info", data.os?.dns);
 
     // SERVICE & VERSION
@@ -101,7 +113,7 @@ function parseBasicsBlock(text){
     // REPLICATION / HOT TABLES
     setPre("pg-repl", data.postgres?.replication_hot);
 
-    // RAW JSON
+    // RAW JSON (colapsado em <details>)
     setPre("raw-json", JSON.stringify(data, null, 2));
   }catch(err){
     setPre("raw-json", "Falha ao carregar health.json: " + err.message);

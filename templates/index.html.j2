@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <title>PG Health — {{ report.host }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="styles.css?v=4" />
-  <script defer src="app.js?v=4"></script>
+  <link rel="stylesheet" href="styles.css?v=5" />
+  <script defer src="app.js?v=5"></script>
 </head>
 <body>
   <header class="topbar">
@@ -15,6 +15,7 @@
       <a href="#service">Service</a>
       <a href="#network">Network</a>
       <a href="#auth">Auth</a>
+      <a href="#db">DB</a>
       <a href="#access">Access</a>
       <a href="#conn">Connections</a>
       <a href="#storage">Storage/WAL</a>
@@ -119,7 +120,7 @@
           <pre id="db-sizes" class="codeblock">—</pre>
         </div>
         <div>
-          <div class="hint">Filesystem /var/lib/pgsql</div>
+          <div class="hint">Filesystem (data dir)</div>
           <pre id="pg-disk" class="codeblock">—</pre>
         </div>
       </div>
@@ -147,13 +148,16 @@
       <pre id="pg-logs" class="codeblock">—</pre>
     </section>
 
-    <!-- RAW JSON -->
+    <!-- RAW JSON (colapsado) -->
     <section id="raw" class="card">
       <div class="card__head">
         <h2>JSON cru</h2>
         <a class="link" href="health.json" target="_blank" rel="noreferrer">/pg-health/health.json</a>
       </div>
-      <pre id="raw-json" class="codeblock small">—</pre>
+      <details>
+        <summary>Mostrar/ocultar JSON</summary>
+        <pre id="raw-json" class="codeblock small">—</pre>
+      </details>
     </section>
   </main>
 

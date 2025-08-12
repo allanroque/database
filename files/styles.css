@@ -31,39 +31,26 @@ body{
 .hero p{color:var(--muted); margin:.25rem 0}
 
 /* Layout */
-.wrap{max-width:1200px; margin:12px auto 28px; padding:0 18px; display:grid; gap:16px}
-.card{
-  background:var(--card); border:1px solid var(--border); border-radius:12px;
-  box-shadow:0 10px 24px var(--shadow); padding:14px 16px;
-}
-.card__head{display:flex; align-items:center; justify-content:space-between; margin-bottom:8px}
-.card h2{margin:0; font-size:18px}
-.badge{
-  padding:4px 10px; border-radius:999px; font-weight:700; font-size:12px;
-  background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe;
-}
-.badge.accent{background:#e0ecff;color:#0b5fe0;border-color:#bcd6ff}
-.badge.warn{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
-.badge.err{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+.wrap{max-width:1200px; margin:8px auto 16px; padding:0 14px; display:grid; gap:12px}
+.card{padding:12px 14px; border-radius:10px}
 
-.grid-2{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px}
-.grid-3{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px}
+/* Títulos e badges */
+.card h2{margin:0; font-size:16px}
 
+/* Tabela KV mais “colada” */
 .kv{width:100%; border-collapse:collapse; border:1px solid var(--border); border-radius:10px; overflow:hidden}
-.kv td{padding:8px 10px; border-bottom:1px solid var(--border)}
+.kv td{padding:6px 10px; border-bottom:1px solid var(--border)}
 .kv tr:last-child td{border-bottom:none}
-.kv td:first-child{color:var(--muted); width:38%}
+.kv td:first-child{color:var(--muted); width:200px; white-space:nowrap}
 
-.hint{color:var(--muted); font-size:12px; margin:6px 0}
+/* Espaço entre cards e seções */
+.grid-2{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px}
+.grid-3{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px}
 
-.codeblock{
-  background:var(--code-bg); color:#dbeafe;
-  border:1px solid var(--code-border); border-radius:10px;
-  padding:12px; overflow:auto; font-family:ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.codeblock.small{font-size:12px}
+/* Blocks de código com altura limitada */
+.codeblock{max-height:260px}
+.codeblock.small{max-height:180px}
 
-.link{color:var(--accent); text-decoration:none}
-.link:hover{text-decoration:underline}
-
-.foot{text-align:center; color:var(--muted); padding:16px 0 28px}
+/* Reduzir margens da hero e topo */
+.topbar{height:56px}
+.hero{margin:8px auto 0; padding:0 14px}
