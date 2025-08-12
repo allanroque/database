@@ -325,14 +325,14 @@
 
     - name: Publicar CSS
       ansible.builtin.copy:
-        src: "templates/styles.css"
+        src: "files/styles.css"
         dest: "{{ web_root }}/styles.css"
         mode: "0644"
       notify: reload apache
 
     - name: Publicar app.js
       ansible.builtin.copy:
-        src: "templates/app.js"
+        src: "files/app.js"
         dest: "{{ web_root }}/app.js"
         mode: "0644"
       notify: reload apache
