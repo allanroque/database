@@ -301,7 +301,9 @@
             extensions_schemas: "{{ exts_out.stdout | default('') }}"
             schema_details: "{{ schema_out.stdout | default('') }}"
             replication_hot: "{{ repl_hot_out.stdout | default('') }}"
-
+    - debug:
+        var: report
+        
     # ====== Web (Apache + templates) ======
     - name: Instalar Apache (httpd)
       ansible.builtin.systemd:
