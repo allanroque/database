@@ -6,24 +6,33 @@
 
   vars:
     pg_user: "postgres"
+    # valor inicial; será sobrescrito por SHOW data_directory (se possível)
     pg_data_dir: "/var/lib/pgsql/data"
     log_tail_lines: 200
-    web_root: "/var/www/html/pg-health"   # DocumentRoot padrão do Apache
+    web_root: "/var/www/html/pg-health"
+    db_name: "{{ target_db | default('postgres') }}"
+    schema_name: "{{ target_schema | default('public') }}"
 
-  tasks:
-    # ====== SO ======
-    - name: Uptime humano
+  pre_tasks:
+    - name: Definir uptime humano
       ansible.builtin.set_fact:
         uptime_h: >-
           {{ (ansible_facts.uptime_seconds | int) // 86400 }}d
           {{ ((ansible_facts.uptime_seconds | int) % 86400) // 3600 }}h
           {{ (((ansible_facts.uptime_seconds | int) % 3600) // 60) }}m
 
-    - name: Sysctl relevantes (sem warnings de shell)
+    - name: Coletar facts de serviços (sem alterar estado)
+      ansible.builtin.service_facts:
+
+  tasks:
+    # ====== SO ======
+    - name: Sysctl relevantes
       ansible.builtin.shell: |
         sysctl -n vm.swappiness || true
         sysctl -n vm.dirty_background_ratio || true
         sysctl -n vm.dirty_ratio || true
+      args:
+        warn: false
       register: sysctl_out
       changed_when: false
 
@@ -33,32 +42,51 @@
         D=/sys/kernel/mm/transparent_hugepage/defrag
         echo -n "enabled: "; (test -r "$E" && cat "$E") || echo "n/a"
         echo -n "defrag:  "; (test -r "$D" && cat "$D") || echo "n/a"
+      args:
+        warn: false
       register: thp_out
       changed_when: false
 
     # ====== Serviço / versão / dirs ======
-    - name: Serviço PostgreSQL (status + enabled)
-      ansible.builtin.shell: |
-        echo -n "enabled: "; systemctl is-enabled postgresql 2>/dev/null || echo "unknown"
-        echo -n "active:  "; systemctl is-active postgresql 2>/dev/null || echo "unknown"
-      register: svc_out
+    - name: Status do serviço (via service_facts)
+      ansible.builtin.set_fact:
+        _svc_state: "{{ ansible_facts.services['postgresql.service'].state
+                        if 'postgresql.service' in ansible_facts.services else 'unknown' }}"
+        _svc_status: "{{ ansible_facts.services['postgresql.service'].status
+                        if 'postgresql.service' in ansible_facts.services else 'unknown' }}"
+
+    - name: Habilitado no boot?
+      ansible.builtin.command: systemctl is-enabled postgresql
+      register: svc_enabled
+      failed_when: false
       changed_when: false
 
     - name: Versão do binário
       ansible.builtin.command: postgres -V
       register: bin_ver
-      changed_when: false
       failed_when: false
+      changed_when: false
 
-    - name: Diretórios e ownership
+    - name: Descobrir data_directory pelo Postgres
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: psql -tAc "SHOW data_directory;"
+      register: data_dir_q
+      failed_when: false
+      changed_when: false
+
+    - name: Ajustar pg_data_dir conforme SHOW data_directory
+      ansible.builtin.set_fact:
+        pg_data_dir: "{{ (data_dir_q.stdout | trim) if (data_dir_q.stdout | trim) else pg_data_dir }}"
+
+    - name: Diretórios e ownership (resumo)
       ansible.builtin.shell: |
-        echo -n "PGDATA="; echo "${PGDATA:-{{ pg_data_dir }}}"
-        ls -ld /var/lib/pgsql /var/lib/pgsql/data 2>/dev/null || true
+        echo "PGDATA={{ pg_data_dir }}"
+        ls -ld "$(dirname '{{ pg_data_dir }}')" "{{ pg_data_dir }}" 2>/dev/null || true
       register: dir_out
       changed_when: false
 
     # ====== Rede / portas / firewall / SELinux ======
-    - name: Rede e portas
+    - name: Rede e portas / Firewall / SELinux
       ansible.builtin.shell: |
         ss -ltnp | grep ':5432 ' || true
         echo "---"
@@ -81,7 +109,7 @@
       register: hba_head
       changed_when: false
 
-    # ====== Bancos / roles / donos ======
+    # ====== Bancos / roles / dono do DB alvo ======
     - name: Listar bancos e roles + dono do DB alvo
       become_user: "{{ pg_user }}"
       ansible.builtin.shell: |
@@ -90,7 +118,11 @@
         echo "-- roles --"
         psql -tAc "SELECT rolname, rolsuper, rolcanlogin FROM pg_roles ORDER BY rolname;" || true
         echo "-- owner --"
-        psql -tAc "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_database WHERE datname='{{ db_name | default(\"postgres\") }}';" || true
+        psql -tAc "SELECT pg_catalog.pg_get_userbyid(datdba)
+                   FROM pg_database
+                   WHERE datname='{{ db_name }}';" || true
+      args:
+        warn: false
       register: acc_out
       changed_when: false
 
@@ -111,15 +143,17 @@
         "SELECT pid, usename, state, wait_event_type, wait_event, now()-xact_start AS xact_age, left(query,80) AS query
          FROM pg_stat_activity WHERE state='idle in transaction'
          ORDER BY xact_start NULLS LAST LIMIT 10;" || true
+      args:
+        warn: false
       register: idle_out
       changed_when: false
 
     # ====== Storage / WAL ======
-    - name: Espaço em disco do /var/lib/pgsql
-      ansible.builtin.command: df -h /var/lib/pgsql
+    - name: Espaço em /var/lib/pgsql (ou data_directory)
+      ansible.builtin.command: df -h "{{ pg_data_dir | dirname }}"
       register: disk_out
-      changed_when: false
       failed_when: false
+      changed_when: false
 
     - name: WAL e bgwriter
       become_user: "{{ pg_user }}"
@@ -160,6 +194,8 @@
         LAST=$(ls -1t "{{ pg_data_dir }}/$LOGDIR" 2>/dev/null | head -1)
         echo "-- tail_errors --"
         tail -n {{ log_tail_lines }} "{{ pg_data_dir }}/$LOGDIR/$LAST" 2>/dev/null | egrep -i "ERROR|FATAL|PANIC" || true
+      args:
+        warn: false
       register: logs_out
       changed_when: false
 
@@ -167,7 +203,7 @@
     - name: Extensões e schemas do DB alvo
       become_user: "{{ pg_user }}"
       ansible.builtin.shell: |
-        DB="{{ db_name | default('postgres') }}"
+        DB="{{ db_name }}"
         echo "-- extensions --"
         psql -d "$DB" -tAc "SELECT extname, extversion FROM pg_extension;" || true
         echo "-- schemas --"
@@ -175,11 +211,11 @@
       register: exts_out
       changed_when: false
 
-    - name: Privilegios em schema (public)
+    - name: Privilegios em schema (lista + dono)
       become_user: "{{ pg_user }}"
       ansible.builtin.shell: |
-        DB="{{ db_name | default('postgres') }}"
-        SCHEMA="{{ schema_name | default('public') }}"
+        DB="{{ db_name }}"
+        SCHEMA="{{ schema_name }}"
         psql -d "$DB" -x -c "SELECT nspname, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname='$SCHEMA';" || true
         psql -d "$DB" -c "SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema='$SCHEMA' ORDER BY 1,2 LIMIT 20;" || true
       register: schema_out
@@ -188,7 +224,7 @@
     - name: Replicação e tabelas quentes
       become_user: "{{ pg_user }}"
       ansible.builtin.shell: |
-        DB="{{ db_name | default('postgres') }}"
+        DB="{{ db_name }}"
         echo "-- recovery? --"
         psql -tAc "SELECT pg_is_in_recovery();" || true
         echo "-- replicas --"
@@ -212,8 +248,8 @@
       register: dns_out
       changed_when: false
 
-    # ====== PostgreSQL ======
-    - name: Postgres básico (via socket)
+    # ====== Postgres básico (bloco simples para parse do front) ======
+    - name: Postgres básico (via socket) – bloco simples
       become_user: "{{ pg_user }}"
       ansible.builtin.shell: |
         psql -tAc "SELECT version();"                || true
@@ -238,16 +274,6 @@
       register: db_sizes
       changed_when: false
 
-    - name: Últimos erros de log
-      become_user: "{{ pg_user }}"
-      ansible.builtin.shell: |
-        LOGDIR=$(psql -tAc "SHOW log_directory;" | tr -d ' ')
-        [ -z "$LOGDIR" ] && exit 0
-        LAST=$(ls -1t "{{ pg_data_dir }}/$LOGDIR" 2>/dev/null | head -1)
-        tail -n {{ log_tail_lines }} "{{ pg_data_dir }}/$LOGDIR/$LAST" 2>/dev/null | egrep -i "ERROR|FATAL|PANIC" || true
-      register: log_errs
-      changed_when: false
-
     # ====== Monta dicionário ======
     - name: Consolidar relatório
       ansible.builtin.set_fact:
@@ -266,7 +292,8 @@
             thp: "{{ thp_out.stdout | default('') }}"
             dns: "{{ dns_out.stdout | default('') }}"
           service:
-            status: "{{ svc_out.stdout | default('') }}"
+            # de service_facts + systemctl is-enabled
+            status: "active={{ _svc_state }}, detail={{ _svc_status }}, enabled={{ svc_enabled.stdout | default('unknown') }}"
             bin_version: "{{ bin_ver.stdout | default('') }}"
             dirs: "{{ dir_out.stdout | default('') }}"
             network: "{{ net_out.stdout | default('') }}"
@@ -287,9 +314,10 @@
 
     # ====== Web (Apache + templates) ======
     - name: Instalar Apache (httpd)
-      ansible.builtin.package:
+      ansible.builtin.systemd:
         name: httpd
-        state: present
+        state: started
+        enabled: true
 
     - name: Criar diretório do site
       ansible.builtin.file:
@@ -297,42 +325,35 @@
         state: directory
         mode: "0755"
 
-    - name: Publicar JSON (health.json)
+    - name: Publicar health.json
       ansible.builtin.template:
         src: "templates/health.json.j2"
         dest: "{{ web_root }}/health.json"
         mode: "0644"
 
-    - name: Publicar css (health.json)
+    - name: Publicar CSS
       ansible.builtin.copy:
-        src: "templates/style.css"
-        dest: "{{ web_root }}/style.css"
+        src: "templates/styles.css"
+        dest: "{{ web_root }}/styles.css"
         mode: "0644"
       notify: reload apache
 
-    - name: Publicar script.js (opcional)
+    - name: Publicar app.js
       ansible.builtin.copy:
         src: "templates/app.js"
         dest: "{{ web_root }}/app.js"
         mode: "0644"
       notify: reload apache
 
-    - name: Publicar página (index.html)
+    - name: Publicar index.html
       ansible.builtin.template:
         src: "templates/index.html.j2"
         dest: "{{ web_root }}/index.html"
         mode: "0644"
       notify: reload apache
 
-    - name: Habilitar e subir Apache
-      ansible.builtin.service:
-        name: httpd
-        state: started
-        enabled: true
-
   handlers:
     - name: reload apache
-      ansible.builtin.service:
+      ansible.builtin.systemd:
         name: httpd
-        state: restarted
-
+        state: reloaded
