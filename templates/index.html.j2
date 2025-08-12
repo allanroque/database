@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <title>PG Health — {{ report.host }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="styles.css?v=5" />
-  <script defer src="app.js?v=5"></script>
+  <link rel="stylesheet" href="styles.css?v=7" />
+  <script defer src="app.js?v=7"></script>
 </head>
 <body>
   <header class="topbar">
@@ -17,25 +17,23 @@
       <a href="#auth">Auth</a>
       <a href="#db">DB</a>
       <a href="#access">Access</a>
-      <a href="#conn">Connections</a>
+      <a href="#conn">Conn</a>
       <a href="#storage">Storage/WAL</a>
       <a href="#schema">Schemas</a>
-      <a href="#repl">Replication</a>
+      <a href="#repl">Repl</a>
       <a href="#logs">Logs</a>
     </nav>
     <div class="meta">
-      <span id="host">—</span>
-      <span class="dot"></span>
-      <span id="collected">—</span>
+      <span id="host">—</span><span class="dot"></span><span id="collected">—</span>
     </div>
   </header>
 
-  <section class="hero">
-    <h1>{{ report.host }}</h1>
-    <p>Coletado em <span id="collected-hero">{{ report.collected_at }}</span></p>
-  </section>
-
   <main class="wrap">
+    <section class="hero">
+      <h1>{{ report.host }}</h1>
+      <p>Coletado em <span id="collected-hero">{{ report.collected_at }}</span></p>
+    </section>
+
     <!-- CORE -->
     <section id="core" class="card">
       <div class="card__head">
@@ -72,17 +70,13 @@
 
     <!-- NETWORK -->
     <section id="network" class="card">
-      <div class="card__head">
-        <h2>Network & Ports</h2><span class="badge">5432 / Firewall / SELinux</span>
-      </div>
+      <div class="card__head"><h2>Network & Ports</h2><span class="badge">5432 / Firewall / SELinux</span></div>
       <pre id="net-info" class="codeblock">—</pre>
     </section>
 
     <!-- AUTH -->
     <section id="auth" class="card">
-      <div class="card__head">
-        <h2>Authentication</h2><span class="badge">pg_hba.conf (head)</span>
-      </div>
+      <div class="card__head"><h2>Authentication</h2><span class="badge">pg_hba.conf (head)</span></div>
       <pre id="hba-head" class="codeblock">—</pre>
     </section>
 
@@ -97,7 +91,7 @@
       <pre id="pg-configs" class="codeblock small">—</pre>
     </section>
 
-    <!-- ACCESS (roles, databases, owner) -->
+    <!-- ACCESS -->
     <section id="access" class="card">
       <div class="card__head"><h2>Access (DBs & Roles)</h2><span class="badge">Ownership</span></div>
       <pre id="pg-accounts" class="codeblock">—</pre>
@@ -111,7 +105,7 @@
       <pre id="pg-idle" class="codeblock small">—</pre>
     </section>
 
-    <!-- STORAGE / SIZES / DISK / WAL -->
+    <!-- STORAGE / SIZES / WAL -->
     <section id="storage" class="card">
       <div class="card__head"><h2>Storage & WAL</h2><span class="badge">Sizes</span></div>
       <div class="grid-2">
@@ -136,7 +130,7 @@
       <pre id="pg-schema" class="codeblock small">—</pre>
     </section>
 
-    <!-- REPLICATION / HOT TABLES -->
+    <!-- REPLICATION -->
     <section id="repl" class="card">
       <div class="card__head"><h2>Replication & Hot Tables</h2><span class="badge">Overview</span></div>
       <pre id="pg-repl" class="codeblock">—</pre>
@@ -148,7 +142,7 @@
       <pre id="pg-logs" class="codeblock">—</pre>
     </section>
 
-    <!-- RAW JSON (colapsado) -->
+    <!-- RAW JSON -->
     <section id="raw" class="card">
       <div class="card__head">
         <h2>JSON cru</h2>

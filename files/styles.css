@@ -1,56 +1,86 @@
 :root{
-  --bg:#f5f7fb; --text:#0f172a; --muted:#64748b;
-  --card:#ffffff; --border:#e5e7eb; --shadow:rgba(15,23,42,.06);
-  --accent:#3a86ff; --ok:#16a34a; --warn:#f59e0b; --err:#ef4444;
-  --code:#0f172a; --code-bg:#0b1220; --code-border:#1e293b;
+  --bg:#0b132b; --card:#1c2541; --accent:#3a86ff;
+  --ok:#2ec4b6; --warn:#ffbe0b; --err:#ef476f;
+  --text:#e6edf3; --muted:#9aa6b2; --border:rgba(255,255,255,.12);
 }
 
 *{box-sizing:border-box}
-html,body{margin:0}
+html,body{height:100%}
 body{
-  background:var(--bg);
-  color:var(--text);
-  font:14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  margin:0; color:var(--text); background:var(--bg);
+  font:14px/1.35 system-ui,Segoe UI,Arial,sans-serif;
 }
 
-/* Topbar */
+/* Top bar */
 .topbar{
-  height:64px; background:#fff; border-bottom:1px solid var(--border);
-  display:flex; align-items:center; gap:16px; padding:0 18px; position:sticky; top:0; z-index:10;
+  height:56px; display:flex; align-items:center; gap:16px;
+  padding:0 16px; border-bottom:1px solid var(--border);
+  background:rgba(0,0,0,.15); backdrop-filter:saturate(120%) blur(4px);
+  position:sticky; top:0; z-index:10;
 }
-.brand{font-weight:700; letter-spacing:.3px}
-.nav{display:flex; gap:12px; flex-wrap:wrap}
+.brand{font-weight:700}
+.nav{display:flex; gap:10px; flex-wrap:wrap}
 .nav a{color:var(--muted); text-decoration:none; font-weight:600}
 .nav a:hover{color:var(--text)}
-.meta{margin-left:auto; display:flex; align-items:center; gap:10px; color:var(--muted)}
-.dot{width:6px;height:6px;border-radius:999px;background:var(--ok);display:inline-block}
+.meta{margin-left:auto; display:flex; align-items:center; gap:8px; color:var(--muted)}
+.dot{width:6px; height:6px; background:var(--ok); border-radius:999px; display:inline-block}
 
-/* Hero */
-.hero{max-width:1200px; margin:14px auto 0; padding:0 18px}
-.hero h1{margin:.25rem 0}
-.hero p{color:var(--muted); margin:.25rem 0}
+/* Main wrapper */
+.wrap{
+  max-width:1200px; margin:8px auto 16px; padding:0 14px;
+  display:grid; gap:12px;
+}
 
-/* Layout */
-.wrap{max-width:1200px; margin:8px auto 16px; padding:0 14px; display:grid; gap:12px}
-.card{padding:12px 14px; border-radius:10px}
+/* Hero compacta */
+.hero{margin:4px 0 0 0}
+.hero h1{margin:4px 0; font-size:18px}
+.hero p{margin:0; color:var(--muted)}
 
-/* Títulos e badges */
+/* Cards */
+.card{
+  background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+  border:1px solid var(--border); border-radius:14px; padding:14px;
+  box-shadow:0 10px 20px rgba(0,0,0,.15), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.card__head{display:flex; align-items:center; gap:10px; margin-bottom:8px}
 .card h2{margin:0; font-size:16px}
+.badge{
+  display:inline-block; padding:2px 8px; border-radius:999px;
+  background:var(--accent); color:#fff; font-weight:700; font-size:11px;
+}
+.badge.warn{background:var(--warn)} .badge.ok{background:var(--ok)} .badge.err{background:var(--err)}
 
-/* Tabela KV mais “colada” */
+/* Grids */
+.grid-2{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px}
+.grid-3{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px}
+
+/* Tabelas KV compactas */
 .kv{width:100%; border-collapse:collapse; border:1px solid var(--border); border-radius:10px; overflow:hidden}
 .kv td{padding:6px 10px; border-bottom:1px solid var(--border)}
 .kv tr:last-child td{border-bottom:none}
-.kv td:first-child{color:var(--muted); width:200px; white-space:nowrap}
+.kv td:first-child{color:var(--muted); width:210px; white-space:nowrap}
 
-/* Espaço entre cards e seções */
-.grid-2{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:10px}
-.grid-3{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px}
-
-/* Blocks de código com altura limitada */
-.codeblock{max-height:260px}
+/* Code blocks */
+.codeblock{
+  background:#0f182f; border:1px solid var(--border);
+  border-radius:10px; padding:10px; overflow:auto; margin:6px 0 0 0;
+  max-height:260px;
+}
 .codeblock.small{max-height:180px}
+.hint{color:var(--muted); font-weight:600; margin-top:8px}
 
-/* Reduzir margens da hero e topo */
-.topbar{height:56px}
-.hero{margin:8px auto 0; padding:0 14px}
+/* Links */
+.link{color:#9ec1ff; text-decoration:none}
+.link:hover{text-decoration:underline}
+
+/* Footer */
+.foot{
+  color:var(--muted); text-align:center; padding:12px 0 20px;
+  max-width:1200px; margin:0 auto;
+}
+
+/* Responsivo fino */
+@media (max-width:480px){
+  .kv td{padding:6px 8px}
+  .kv td:first-child{width:160px}
+}
