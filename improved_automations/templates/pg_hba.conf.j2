@@ -1,0 +1,42 @@
+# PostgreSQL Client Authentication Configuration File
+# ===========================================
+#
+# Refer to the "Client Authentication" section in the PostgreSQL
+# documentation for a complete description of this file.
+
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+
+# "local" is for Unix domain socket connections only
+local   all             all                                     {{ pg_hba_method | default('md5') }}
+
+# IPv4 local connections:
+{% if pg_allow_local_connections | default(true) %}
+host    all             all             127.0.0.1/32            {{ pg_hba_method | default('md5') }}
+{% endif %}
+
+# IPv6 local connections:
+{% if pg_allow_local_connections | default(true) %}
+host    all             all             ::1/128                 {{ pg_hba_method | default('md5') }}
+{% endif %}
+
+# Allow replication connections from localhost, by a user with the
+# replication privilege.
+local   replication     all                                     {{ pg_hba_method | default('md5') }}
+{% if pg_allow_local_connections | default(true) %}
+host    replication     all             127.0.0.1/32            {{ pg_hba_method | default('md5') }}
+host    replication     all             ::1/128                 {{ pg_hba_method | default('md5') }}
+{% endif %}
+
+# Remote connections (configured via variables)
+{% if pg_allow_remote_connections | default(false) %}
+{% for network in pg_allowed_networks | default(['127.0.0.1/32']) %}
+host    all             all             {{ network }}            {{ pg_hba_method | default('md5') }}
+{% endfor %}
+{% endif %}
+
+# SSL connections (if enabled)
+{% if pg_ssl_enabled | default(true) %}
+# SSL connections require client certificates
+# hostssl all             all             0.0.0.0/0               cert
+# hostssl all             all             ::/0                    cert
+{% endif %}

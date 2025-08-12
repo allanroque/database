@@ -1,0 +1,152 @@
+---
+- name: Gerenciamento de Bancos de Dados SQL Server
+  hosts: windows_db_servers
+  gather_facts: true
+
+  vars:
+    # Configurações padrão
+    sql_server_instance: "{{ sql_server_instance | default('MSSQLSERVER') }}"
+    sql_server_port: "{{ sql_server_port | default(1433) }}"
+    sql_connection_string: "Server=localhost;Database=master;Integrated Security=true;"
+    
+    # Configurações de template
+    default_collation: "SQL_Latin1_General_CP1_CI_AS"
+    default_recovery_model: "SIMPLE"  # SIMPLE, FULL, BULK_LOGGED
+    default_compatibility_level: "150"  # 140, 150, 160
+    
+    # Lista de bancos de dados a serem criados/gerenciados
+    sql_databases:
+      - name: "app1"
+        owner: "sa"
+        collation: "SQL_Latin1_General_CP1_CI_AS"
+        recovery_model: "SIMPLE"
+        compatibility_level: "150"
+        data_file_size: "100MB"
+        log_file_size: "50MB"
+        data_file_growth: "10MB"
+        log_file_growth: "10MB"
+        max_size: "UNLIMITED"
+        comment: "Banco de dados da aplicação principal"
+        schemas:
+          - name: "dbo"
+            owner: "dbo"
+          - name: "app"
+            owner: "dbo"
+        
+      - name: "app2"
+        owner: "sa"
+        collation: "SQL_Latin1_General_CP1_CI_AS"
+        recovery_model: "SIMPLE"
+        compatibility_level: "150"
+        data_file_size: "100MB"
+        log_file_size: "50MB"
+        data_file_growth: "10MB"
+        log_file_growth: "10MB"
+        max_size: "UNLIMITED"
+        comment: "Banco de dados da aplicação secundária"
+        schemas:
+          - name: "dbo"
+            owner: "dbo"
+        
+      - name: "financeiro"
+        owner: "sa"
+        collation: "SQL_Latin1_General_CP1_CI_AS"
+        recovery_model: "FULL"
+        compatibility_level: "150"
+        data_file_size: "200MB"
+        log_file_size: "100MB"
+        data_file_growth: "20MB"
+        log_file_growth: "20MB"
+        max_size: "UNLIMITED"
+        comment: "Banco de dados financeiro"
+        schemas:
+          - name: "dbo"
+            owner: "dbo"
+          - name: "finance"
+            owner: "dbo"
+        
+      - name: "rh"
+        owner: "sa"
+        collation: "SQL_Latin1_General_CP1_CI_AS"
+        recovery_model: "SIMPLE"
+        compatibility_level: "150"
+        data_file_size: "150MB"
+        log_file_size: "75MB"
+        data_file_growth: "15MB"
+        log_file_growth: "15MB"
+        max_size: "UNLIMITED"
+        comment: "Banco de dados de recursos humanos"
+        schemas:
+          - name: "dbo"
+            owner: "dbo"
+          - name: "rh"
+            owner: "dbo"
+
+  pre_tasks:
+    - name: Validar configurações de bancos
+      assert:
+        that:
+          - item.name is defined
+          - item.owner is defined
+          - item.collation is defined
+        fail_msg: "Configuração inválida para banco {{ item.name }}"
+      loop: "{{ sql_databases }}"
+
+    - name: Verificar conectividade com SQL Server
+      win_shell: |
+        try {
+          $connection = New-Object System.Data.SqlClient.SqlConnection
+          $connection.ConnectionString = "{{ sql_connection_string }}"
+          $connection.Open()
+          $connection.Close()
+          Write-Output "SQL Server connection successful"
+        }
+        catch {
+          Write-Output "SQL Server connection failed: $($_.Exception.Message)"
+          exit 1
+        }
+      register: sql_connectivity
+      failed_when: false
+
+    - name: Falhar se SQL Server não estiver acessível
+      fail:
+        msg: "SQL Server não está acessível. Verifique se o serviço está rodando."
+      when: sql_connectivity.rc != 0
+
+  tasks:
+    - name: Coletar bancos existentes
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $databases = $smo.Databases | Where-Object {$_.IsSystemObject -eq $false} | Select-Object Name
+        $databases | ForEach-Object { $_.Name }
+      register: existing_databases
+      changed_when: false
+
+    - name: Processar cada banco de dados
+      include_tasks: tasks/manage_single_sqlserver_database.yml
+      loop: "{{ sql_databases }}"
+      loop_control:
+        loop_var: current_db
+
+  post_tasks:
+    - name: Verificar bancos criados
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $databases = $smo.Databases | Where-Object {$_.IsSystemObject -eq $false} | Select-Object Name, Size, RecoveryModel, CompatibilityLevel
+        $databases | ForEach-Object { "$($_.Name) - Size: $([math]::Round($_.Size,2)) MB - Recovery: $($_.RecoveryModel) - Compat: $($_.CompatibilityLevel)" }
+      register: final_databases_check
+      changed_when: false
+
+    - name: Exibir resumo dos bancos
+      debug:
+        msg: |
+          Bancos de Dados SQL Server:
+          {{ final_databases_check.stdout_lines | join('\n') }}
+
+  handlers:
+    - name: restart sql server
+      win_service:
+        name: "MSSQL${{ sql_server_instance }}"
+        state: restarted

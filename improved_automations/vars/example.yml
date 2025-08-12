@@ -1,0 +1,146 @@
+# Arquivo de exemplo de variáveis para automações de banco de dados
+# Copie este arquivo e renomeie conforme necessário (ex: production.yml, development.yml)
+
+# ===== CONFIGURAÇÕES GERAIS =====
+pg_version: "15"
+pg_port: 5432
+pg_data_dir: "/var/lib/pgsql/data"
+
+# ===== CONFIGURAÇÕES DE PERFORMANCE =====
+pg_max_connections: 200
+pg_shared_buffers: "1GB"
+pg_work_mem: "16MB"
+pg_maintenance_work_mem: "256MB"
+pg_effective_cache_size: "4GB"
+pg_wal_level: "replica"
+pg_max_wal_size: "2GB"
+
+# ===== CONFIGURAÇÕES DE SEGURANÇA =====
+pg_ssl_enabled: true
+pg_allow_remote_connections: false
+pg_allowed_networks:
+  - "127.0.0.1/32"
+  - "192.168.1.0/24"
+
+# ===== CONFIGURAÇÕES DE LOG =====
+pg_log_directory: "log"
+pg_log_filename: "postgresql-%Y-%m-%d_%H%M%S.log"
+pg_log_min_duration_statement: 1000
+
+# ===== USUÁRIOS DO BANCO =====
+db_users:
+  - username: "app_user"
+    password: "{{ vault_app_user_password }}"
+    profile: "readwrite"
+    databases: ["app1", "app2"]
+    schemas: ["public", "app"]
+    valid_until: "infinity"
+    comment: "Usuário da aplicação principal"
+    
+  - username: "readonly_user"
+    password: "{{ vault_readonly_user_password }}"
+    profile: "readonly"
+    databases: ["app1", "app2", "financeiro"]
+    schemas: ["public"]
+    valid_until: "infinity"
+    comment: "Usuário somente leitura"
+    
+  - username: "admin_user"
+    password: "{{ vault_admin_user_password }}"
+    profile: "admin"
+    databases: ["app1"]
+    schemas: ["public", "admin"]
+    valid_until: "2025-12-31"
+    comment: "Usuário administrador"
+
+# ===== BANCOS DE DADOS =====
+db_databases:
+  - name: "app1"
+    owner: "postgres"
+    template: "template0"
+    encoding: "UTF8"
+    locale: "en_US.UTF-8"
+    collate: "en_US.UTF-8"
+    ctype: "en_US.UTF-8"
+    tablespace: ""
+    connection_limit: -1
+    comment: "Banco de dados da aplicação principal"
+    schemas:
+      - name: "public"
+        owner: "postgres"
+      - name: "app"
+        owner: "postgres"
+    extensions:
+      - "uuid-ossp"
+      - "pgcrypto"
+      
+  - name: "app2"
+    owner: "postgres"
+    template: "template0"
+    encoding: "UTF8"
+    locale: "en_US.UTF-8"
+    collate: "en_US.UTF-8"
+    ctype: "en_US.UTF-8"
+    tablespace: ""
+    connection_limit: -1
+    comment: "Banco de dados da aplicação secundária"
+    schemas:
+      - name: "public"
+        owner: "postgres"
+    extensions:
+      - "uuid-ossp"
+      
+  - name: "financeiro"
+    owner: "postgres"
+    template: "template0"
+    encoding: "UTF8"
+    locale: "en_US.UTF-8"
+    collate: "en_US.UTF-8"
+    ctype: "en_US.UTF-8"
+    tablespace: ""
+    connection_limit: 50
+    comment: "Banco de dados financeiro"
+    schemas:
+      - name: "public"
+        owner: "postgres"
+      - name: "finance"
+        owner: "postgres"
+    extensions:
+      - "uuid-ossp"
+      - "pgcrypto"
+
+# ===== CONFIGURAÇÕES DE MONITORAMENTO =====
+monitoring_enabled: true
+alert_email: "dba@company.com"
+health_check_interval: 300
+max_connections_threshold: 80
+disk_usage_threshold: 85
+memory_usage_threshold: 80
+cpu_usage_threshold: 80
+
+# ===== CONFIGURAÇÕES DE BACKUP =====
+backup_dir: "/var/backups/postgresql"
+backup_format: "custom"
+backup_compression: true
+backup_retention_days: 30
+
+# ===== CONFIGURAÇÕES DO SERVICENOW =====
+snow_instance: "https://your-instance.service-now.com"
+snow_username: "ansible_user"
+snow_password: "{{ vault_snow_password }}"
+change_impact: "low"
+change_urgency: "low"
+change_category: "database"
+notify_on_change: true
+notification_email: "dba@company.com"
+
+# ===== CONFIGURAÇÕES DE SMTP =====
+smtp_host: "smtp.company.com"
+smtp_port: 587
+smtp_username: "{{ vault_smtp_username }}"
+smtp_password: "{{ vault_smtp_password }}"
+
+# ===== CONFIGURAÇÕES DE AMBIENTE =====
+# environment: "production"  # production, staging, development
+debug_mode: false
+verbose_output: true

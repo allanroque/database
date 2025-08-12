@@ -1,0 +1,140 @@
+---
+- name: Verificar se usuário existe
+  become_user: "{{ pg_user }}"
+  ansible.builtin.command: >
+    psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='{{ current_user.username }}';"
+  register: user_exists
+  changed_when: false
+
+- name: Criar ou atualizar usuário
+  become_user: "{{ pg_user }}"
+  no_log: true
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -c
+    "{% if user_exists.stdout.strip() | length == 0 -%}
+       CREATE ROLE {{ current_user.username }} WITH LOGIN PASSWORD '{{ current_user.password }}'
+       NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT 
+       CONNECTION LIMIT {{ access_profiles[current_user.profile].connection_limit }}
+       VALID UNTIL '{{ current_user.valid_until }}';
+     {%- else -%}
+       ALTER ROLE {{ current_user.username }} WITH PASSWORD '{{ current_user.password }}'
+       CONNECTION LIMIT {{ access_profiles[current_user.profile].connection_limit }}
+       VALID UNTIL '{{ current_user.valid_until }}';
+     {%- endif %}"
+  register: create_user_result
+
+- name: Configurar parâmetros de sessão do usuário
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -c
+    "ALTER ROLE {{ current_user.username }}
+       SET search_path TO {{ access_profiles[current_user.profile].search_path }};
+     ALTER ROLE {{ current_user.username }}
+       SET statement_timeout TO '{{ access_profiles[current_user.profile].statement_timeout }}';"
+  changed_when: false
+
+- name: Adicionar comentário ao usuário
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -c
+    "COMMENT ON ROLE {{ current_user.username }} IS '{{ current_user.comment }}';"
+  changed_when: false
+
+- name: Conceder privilégios nos bancos de dados
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ item }} -c
+    "GRANT CONNECT ON DATABASE {{ item }} TO {{ current_user.username }};"
+  loop: "{{ current_user.databases }}"
+  changed_when: false
+
+- name: Conceder privilégios nos schemas
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_item }} -c
+    "GRANT {{ access_profiles[current_user.profile].schema_privileges }} ON SCHEMA {{ schema_item }} TO {{ current_user.username }};"
+  loop: "{{ current_user.databases | product(current_user.schemas) }}"
+  loop_control:
+    loop_var: db_item
+    index_var: schema_item
+  vars:
+    db_item: "{{ item[0] }}"
+    schema_item: "{{ item[1] }}"
+  changed_when: false
+
+- name: Conceder privilégios nas tabelas existentes
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_item }} -c
+    "GRANT {{ access_profiles[current_user.profile].table_privileges }} ON ALL TABLES IN SCHEMA {{ schema_item }} TO {{ current_user.username }};"
+  loop: "{{ current_user.databases | product(current_user.schemas) }}"
+  loop_control:
+    loop_var: db_item
+    index_var: schema_item
+  vars:
+    db_item: "{{ item[0] }}"
+    schema_item: "{{ item[1] }}"
+  changed_when: false
+
+- name: Conceder privilégios nas sequências existentes
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_item }} -c
+    "GRANT {{ access_profiles[current_user.profile].sequence_privileges }} ON ALL SEQUENCES IN SCHEMA {{ schema_item }} TO {{ current_user.username }};"
+  loop: "{{ current_user.databases | product(current_user.schemas) }}"
+  loop_control:
+    loop_var: db_item
+    index_var: schema_item
+  vars:
+    db_item: "{{ item[0] }}"
+    schema_item: "{{ item[1] }}"
+  changed_when: false
+
+- name: Configurar default privileges para tabelas futuras
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_item }} -c
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_item }}
+       GRANT {{ access_profiles[current_user.profile].default_table_privileges }} ON TABLES TO {{ current_user.username }};"
+  loop: "{{ current_user.databases | product(current_user.schemas) }}"
+  loop_control:
+    loop_var: db_item
+    index_var: schema_item
+  vars:
+    db_item: "{{ item[0] }}"
+    schema_item: "{{ item[1] }}"
+  changed_when: false
+
+- name: Configurar default privileges para sequências futuras
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ db_item }} -c
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA {{ schema_item }}
+       GRANT {{ access_profiles[current_user.profile].default_sequence_privileges }} ON SEQUENCES TO {{ current_user.username }};"
+  loop: "{{ current_user.databases | product(current_user.schemas) }}"
+  loop_control:
+    loop_var: db_item
+    index_var: schema_item
+  vars:
+    db_item: "{{ item[0] }}"
+    schema_item: "{{ item[1] }}"
+  changed_when: false
+
+- name: Verificar usuário criado/atualizado
+  become_user: "{{ pg_user }}"
+  ansible.builtin.command: >
+    psql -tAc "SELECT rolname, rolcanlogin, rolconnlimit, rolvaliduntil 
+               FROM pg_roles 
+               WHERE rolname='{{ current_user.username }}';"
+  register: user_check
+  changed_when: false
+
+- name: Exibir informações do usuário
+  ansible.builtin.debug:
+    msg: |
+      Usuário '{{ current_user.username }}' processado:
+      - Perfil: {{ current_user.profile }}
+      - Bancos: {{ current_user.databases | join(', ') }}
+      - Schemas: {{ current_user.schemas | join(', ') }}
+      - Status: {{ 'Criado' if user_exists.stdout.strip() | length == 0 else 'Atualizado' }}
+      - Detalhes: {{ user_check.stdout }}

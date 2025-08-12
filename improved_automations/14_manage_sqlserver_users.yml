@@ -1,0 +1,129 @@
+---
+- name: Gerenciamento de Usuários SQL Server
+  hosts: windows_db_servers
+  gather_facts: true
+
+  vars:
+    # Configurações padrão
+    sql_server_instance: "{{ sql_server_instance | default('MSSQLSERVER') }}"
+    sql_server_port: "{{ sql_server_port | default(1433) }}"
+    sql_connection_string: "Server=localhost;Database=master;Integrated Security=true;"
+    
+    # Perfis de acesso disponíveis
+    sql_access_profiles:
+      readonly:
+        server_roles: []
+        database_roles: ["db_datareader"]
+        permissions: ["SELECT"]
+        connection_limit: 10
+        
+      readwrite:
+        server_roles: []
+        database_roles: ["db_datareader", "db_datawriter"]
+        permissions: ["SELECT", "INSERT", "UPDATE", "DELETE"]
+        connection_limit: 20
+        
+      admin:
+        server_roles: ["dbcreator", "securityadmin"]
+        database_roles: ["db_owner"]
+        permissions: ["ALL"]
+        connection_limit: 50
+
+    # Lista de usuários a serem criados/gerenciados
+    sql_users:
+      - username: "app_user"
+        password: "{{ vault_sql_app_user_password | default('ChangeMe123!') }}"
+        profile: "readwrite"
+        databases: ["app1", "app2"]
+        default_database: "app1"
+        login_type: "SQL"  # SQL, Windows
+        enabled: true
+        comment: "Usuário da aplicação principal"
+        
+      - username: "readonly_user"
+        password: "{{ vault_sql_readonly_user_password | default('ReadOnly123!') }}"
+        profile: "readonly"
+        databases: ["app1", "app2", "financeiro"]
+        default_database: "app1"
+        login_type: "SQL"
+        enabled: true
+        comment: "Usuário somente leitura"
+        
+      - username: "admin_user"
+        password: "{{ vault_sql_admin_user_password | default('Admin123!') }}"
+        profile: "admin"
+        databases: ["app1"]
+        default_database: "app1"
+        login_type: "SQL"
+        enabled: true
+        comment: "Usuário administrador"
+
+  pre_tasks:
+    - name: Validar configurações de usuários
+      assert:
+        that:
+          - item.username is defined
+          - item.password is defined
+          - item.profile is defined
+          - item.profile in sql_access_profiles.keys()
+        fail_msg: "Configuração inválida para usuário {{ item.username }}"
+      loop: "{{ sql_users }}"
+
+    - name: Verificar conectividade com SQL Server
+      win_shell: |
+        try {
+          $connection = New-Object System.Data.SqlClient.SqlConnection
+          $connection.ConnectionString = "{{ sql_connection_string }}"
+          $connection.Open()
+          $connection.Close()
+          Write-Output "SQL Server connection successful"
+        }
+        catch {
+          Write-Output "SQL Server connection failed: $($_.Exception.Message)"
+          exit 1
+        }
+      register: sql_connectivity
+      failed_when: false
+
+    - name: Falhar se SQL Server não estiver acessível
+      fail:
+        msg: "SQL Server não está acessível. Verifique se o serviço está rodando."
+      when: sql_connectivity.rc != 0
+
+  tasks:
+    - name: Coletar logins existentes
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $logins = $smo.Logins | Where-Object {$_.LoginType -eq 'SqlLogin'} | Select-Object Name
+        $logins | ForEach-Object { $_.Name }
+      register: existing_logins
+      changed_when: false
+
+    - name: Processar cada usuário
+      include_tasks: tasks/manage_single_sqlserver_user.yml
+      loop: "{{ sql_users }}"
+      loop_control:
+        loop_var: current_user
+
+  post_tasks:
+    - name: Verificar usuários criados
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $logins = $smo.Logins | Where-Object {$_.LoginType -eq 'SqlLogin'} | Select-Object Name, IsDisabled, DefaultDatabase
+        $logins | ForEach-Object { "$($_.Name) - DefaultDB: $($_.DefaultDatabase) - Disabled: $($_.IsDisabled)" }
+      register: final_users_check
+      changed_when: false
+
+    - name: Exibir resumo dos usuários
+      debug:
+        msg: |
+          Usuários SQL Server:
+          {{ final_users_check.stdout_lines | join('\n') }}
+
+  handlers:
+    - name: restart sql server
+      win_service:
+        name: "MSSQL${{ sql_server_instance }}"
+        state: restarted

@@ -1,0 +1,183 @@
+---
+- name: Verificar se banco existe
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases | Where-Object {$_.Name -eq '{{ current_db.name }}'}
+    if ($db) { Write-Output "EXISTS" } else { Write-Output "NOT_EXISTS" }
+  register: db_exists
+  changed_when: false
+
+- name: Criar banco de dados
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    
+    if ('{{ db_exists.stdout }}' -eq 'NOT_EXISTS') {
+      # Criar novo banco de dados
+      $db = New-Object Microsoft.SqlServer.Management.Smo.Database($smo, '{{ current_db.name }}')
+      $db.Collation = '{{ current_db.collation }}'
+      $db.RecoveryModel = [Microsoft.SqlServer.Management.Smo.RecoveryModel]::{{ current_db.recovery_model }}
+      $db.CompatibilityLevel = [Microsoft.SqlServer.Management.Smo.CompatibilityLevel]::Version{{ current_db.compatibility_level }}
+      
+      # Configurar arquivo de dados
+      $dataFile = New-Object Microsoft.SqlServer.Management.Smo.DataFile($db, '{{ current_db.name }}_Data')
+      $dataFile.FileName = "$($smo.DefaultFile)\{{ current_db.name }}_Data.mdf"
+      $dataFile.Size = {{ current_db.data_file_size | regex_replace('MB', ' * 1024 * 1024') | int }}
+      $dataFile.Growth = {{ current_db.data_file_growth | regex_replace('MB', ' * 1024 * 1024') | int }}
+      if ('{{ current_db.max_size }}' -eq 'UNLIMITED') {
+        $dataFile.MaxSize = -1
+      } else {
+        $dataFile.MaxSize = {{ current_db.max_size | regex_replace('MB', ' * 1024 * 1024') | int }}
+      }
+      
+      # Configurar arquivo de log
+      $logFile = New-Object Microsoft.SqlServer.Management.Smo.LogFile($db, '{{ current_db.name }}_Log')
+      $logFile.FileName = "$($smo.DefaultLog)\{{ current_db.name }}_Log.ldf"
+      $logFile.Size = {{ current_db.log_file_size | regex_replace('MB', ' * 1024 * 1024') | int }}
+      $logFile.Growth = {{ current_db.log_file_growth | regex_replace('MB', ' * 1024 * 1024') | int }}
+      if ('{{ current_db.max_size }}' -eq 'UNLIMITED') {
+        $logFile.MaxSize = -1
+      } else {
+        $logFile.MaxSize = {{ current_db.max_size | regex_replace('MB', ' * 1024 * 1024') | int }}
+      }
+      
+      # Criar banco
+      $db.Create()
+      Write-Output "Database created"
+    } else {
+      Write-Output "Database already exists"
+    }
+  register: create_db_result
+
+- name: Configurar owner do banco
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    if ($db) {
+      $db.SetOwner('{{ current_db.owner }}')
+      Write-Output "Owner set to {{ current_db.owner }}"
+    }
+  when: current_db.owner is defined and current_db.owner != 'sa'
+  changed_when: false
+
+- name: Criar schemas adicionais
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    
+    {% for schema in current_db.schemas %}
+    {% if schema.name != 'dbo' %}
+    $schema = $db.Schemas | Where-Object {$_.Name -eq '{{ schema.name }}'}
+    if (-not $schema) {
+      $newSchema = New-Object Microsoft.SqlServer.Management.Smo.Schema($db, '{{ schema.name }}')
+      $newSchema.Owner = '{{ schema.owner }}'
+      $newSchema.Create()
+      Write-Output "Schema {{ schema.name }} created"
+    }
+    {% endif %}
+    {% endfor %}
+  when: current_db.schemas is defined
+  changed_when: false
+
+- name: Configurar propriedades do banco
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    
+    if ($db) {
+      # Configurar propriedades
+      $db.RecoveryModel = [Microsoft.SqlServer.Management.Smo.RecoveryModel]::{{ current_db.recovery_model }}
+      $db.CompatibilityLevel = [Microsoft.SqlServer.Management.Smo.CompatibilityLevel]::Version{{ current_db.compatibility_level }}
+      $db.AutoClose = $false
+      $db.AutoShrink = $false
+      $db.ReadOnly = $false
+      
+      $db.Alter()
+      Write-Output "Database properties updated"
+    }
+  changed_when: false
+
+- name: Adicionar comentário ao banco
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    
+    if ($db -and '{{ current_db.comment }}') {
+      # SQL Server não tem comentários nativos como PostgreSQL
+      # Podemos usar Extended Properties para armazenar comentários
+      $extendedProperty = $db.ExtendedProperties | Where-Object {$_.Name -eq 'Description'}
+      if (-not $extendedProperty) {
+        $newProperty = New-Object Microsoft.SqlServer.Management.Smo.ExtendedProperty($db, 'Description')
+        $newProperty.Value = '{{ current_db.comment }}'
+        $newProperty.Create()
+      } else {
+        $extendedProperty.Value = '{{ current_db.comment }}'
+        $extendedProperty.Alter()
+      }
+      Write-Output "Comment added to database"
+    }
+  when: current_db.comment is defined
+  changed_when: false
+
+- name: Verificar banco criado/configurado
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    
+    if ($db) {
+      Write-Output "Name: $($db.Name)"
+      Write-Output "Size: $([math]::Round($db.Size,2)) MB"
+      Write-Output "Owner: $($db.Owner)"
+      Write-Output "Collation: $($db.Collation)"
+      Write-Output "RecoveryModel: $($db.RecoveryModel)"
+      Write-Output "CompatibilityLevel: $($db.CompatibilityLevel)"
+      Write-Output "Status: $($db.Status)"
+    }
+  register: db_check
+  changed_when: false
+
+- name: Verificar schemas do banco
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    
+    if ($db) {
+      $schemas = $db.Schemas | Where-Object {$_.Name -ne 'INFORMATION_SCHEMA' -and $_.Name -notlike 'sys*'} | Select-Object Name, Owner
+      $schemas | ForEach-Object { "Schema: $($_.Name) - Owner: $($_.Owner)" }
+    }
+  register: schemas_check
+  changed_when: false
+
+- name: Verificar arquivos do banco
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $db = $smo.Databases['{{ current_db.name }}']
+    
+    if ($db) {
+      $files = $db.FileGroups[0].Files + $db.LogFiles
+      $files | ForEach-Object { "File: $($_.Name) - Type: $($_.FileType) - Size: $([math]::Round($_.Size/1024/1024,2)) MB - Path: $($_.FileName)" }
+    }
+  register: files_check
+  changed_when: false
+
+- name: Exibir informações do banco
+  debug:
+    msg: |
+      Banco '{{ current_db.name }}' processado:
+      - Status: {{ 'Criado' if db_exists.stdout == 'NOT_EXISTS' else 'Já existia' }}
+      - Owner: {{ current_db.owner }}
+      - Collation: {{ current_db.collation }}
+      - Recovery Model: {{ current_db.recovery_model }}
+      - Compatibility Level: {{ current_db.compatibility_level }}
+      - Data File Size: {{ current_db.data_file_size }}
+      - Log File Size: {{ current_db.log_file_size }}
+      - Schemas: {{ current_db.schemas | map(attribute='name') | list | join(', ') if current_db.schemas else 'apenas dbo' }}
+      - Tamanho: {{ db_check.stdout_lines[1] if db_check.stdout_lines else 'N/A' }}

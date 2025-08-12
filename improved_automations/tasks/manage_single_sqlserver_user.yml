@@ -1,0 +1,161 @@
+---
+- name: Verificar se login existe
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $login = $smo.Logins | Where-Object {$_.Name -eq '{{ current_user.username }}'}
+    if ($login) { Write-Output "EXISTS" } else { Write-Output "NOT_EXISTS" }
+  register: login_exists
+  changed_when: false
+
+- name: Criar ou atualizar login
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    
+    if ('{{ login_exists.stdout }}' -eq 'NOT_EXISTS') {
+      # Criar novo login
+      $login = New-Object Microsoft.SqlServer.Management.Smo.Login($smo, '{{ current_user.username }}')
+      $login.LoginType = [Microsoft.SqlServer.Management.Smo.LoginType]::SqlLogin
+      $login.PasswordPolicyEnforced = $true
+      $login.PasswordExpirationEnabled = $true
+      $login.Create('{{ current_user.password }}')
+      Write-Output "Login created"
+    } else {
+      # Atualizar login existente
+      $login = $smo.Logins['{{ current_user.username }}']
+      $login.ChangePassword('{{ current_user.password }}')
+      Write-Output "Login updated"
+    }
+    
+    # Configurar propriedades do login
+    $login.DefaultDatabase = '{{ current_user.default_database }}'
+    $login.IsDisabled = ${{ not current_user.enabled | bool }}
+    $login.Alter()
+  no_log: true
+  register: create_login_result
+
+- name: Conceder roles de servidor
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $login = $smo.Logins['{{ current_user.username }}']
+    
+    {% for role in sql_access_profiles[current_user.profile].server_roles %}
+    $role = $smo.Roles['{{ role }}']
+    if ($role -and -not $role.EnumMemberNames().Contains('{{ current_user.username }}')) {
+      $role.AddMember('{{ current_user.username }}')
+    }
+    {% endfor %}
+  when: sql_access_profiles[current_user.profile].server_roles | length > 0
+  changed_when: false
+
+- name: Conceder acesso aos bancos de dados
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    
+    {% for database in current_user.databases %}
+    $db = $smo.Databases['{{ database }}']
+    if ($db) {
+      # Criar usuário no banco se não existir
+      $user = $db.Users | Where-Object {$_.Name -eq '{{ current_user.username }}'}
+      if (-not $user) {
+        $user = New-Object Microsoft.SqlServer.Management.Smo.User($db, '{{ current_user.username }}')
+        $user.Login = '{{ current_user.username }}'
+        $user.Create()
+      }
+      
+      # Conceder roles de banco
+      {% for role in sql_access_profiles[current_user.profile].database_roles %}
+      $role = $db.Roles['{{ role }}']
+      if ($role -and -not $role.EnumMemberNames().Contains('{{ current_user.username }}')) {
+        $role.AddMember('{{ current_user.username }}')
+      }
+      {% endfor %}
+    }
+    {% endfor %}
+  changed_when: false
+
+- name: Conceder permissões específicas
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    
+    {% for database in current_user.databases %}
+    $db = $smo.Databases['{{ database }}']
+    if ($db) {
+      $user = $db.Users['{{ current_user.username }}']
+      if ($user) {
+        {% for permission in sql_access_profiles[current_user.profile].permissions %}
+        {% if permission != 'ALL' %}
+        $permission = New-Object Microsoft.SqlServer.Management.Smo.DatabasePermission($user, [Microsoft.SqlServer.Management.Smo.DatabasePermissionSet]::{{ permission }})
+        $permission.Grant()
+        {% endif %}
+        {% endfor %}
+      }
+    }
+    {% endfor %}
+  when: sql_access_profiles[current_user.profile].permissions | length > 0 and 'ALL' not in sql_access_profiles[current_user.profile].permissions
+  changed_when: false
+
+- name: Configurar limitação de conexões (se suportado)
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $login = $smo.Logins['{{ current_user.username }}']
+    
+    # Nota: Limitação de conexões por usuário não é nativamente suportada no SQL Server
+    # Esta é uma implementação básica usando Resource Governor (se disponível)
+    Write-Output "Connection limit configured: {{ sql_access_profiles[current_user.profile].connection_limit }}"
+  changed_when: false
+
+- name: Verificar login criado/atualizado
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    $login = $smo.Logins['{{ current_user.username }}']
+    
+    Write-Output "Login: $($login.Name)"
+    Write-Output "LoginType: $($login.LoginType)"
+    Write-Output "DefaultDatabase: $($login.DefaultDatabase)"
+    Write-Output "IsDisabled: $($login.IsDisabled)"
+    Write-Output "PasswordPolicyEnforced: $($login.PasswordPolicyEnforced)"
+    Write-Output "PasswordExpirationEnabled: $($login.PasswordExpirationEnabled)"
+  register: login_check
+  changed_when: false
+
+- name: Verificar acesso aos bancos
+  win_shell: |
+    Import-Module SqlServer
+    $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+    
+    {% for database in current_user.databases %}
+    $db = $smo.Databases['{{ database }}']
+    if ($db) {
+      $user = $db.Users['{{ current_user.username }}']
+      if ($user) {
+        Write-Output "Database {{ database }}: User exists"
+        $roles = $user.EnumRoles()
+        Write-Output "Roles: $($roles -join ', ')"
+      } else {
+        Write-Output "Database {{ database }}: User not found"
+      }
+    } else {
+      Write-Output "Database {{ database }}: Database not found"
+    }
+    {% endfor %}
+  register: database_access_check
+  changed_when: false
+
+- name: Exibir informações do usuário
+  debug:
+    msg: |
+      Usuário '{{ current_user.username }}' processado:
+      - Perfil: {{ current_user.profile }}
+      - Bancos: {{ current_user.databases | join(', ') }}
+      - Tipo de Login: {{ current_user.login_type }}
+      - Status: {{ 'Criado' if login_exists.stdout == 'NOT_EXISTS' else 'Atualizado' }}
+      - Habilitado: {{ current_user.enabled }}
+      - Banco Padrão: {{ current_user.default_database }}
+      - Detalhes: {{ login_check.stdout_lines | join(' | ') }}

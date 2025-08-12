@@ -1,0 +1,323 @@
+---
+- name: Utilitários para Banco de Dados PostgreSQL
+  hosts: db_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # Configurações padrão
+    pg_user: "postgres"
+    pg_port: "{{ pg_port | default(5432) }}"
+    
+    # Configurações de operação
+    target_database: "{{ target_database | default('postgres') }}"
+    target_schema: "{{ target_schema | default('public') }}"
+    
+    # Configurações de backup
+    backup_dir: "{{ backup_dir | default('/var/backups/postgresql') }}"
+    backup_format: "{{ backup_format | default('custom') }}"  # custom, plain, directory
+    backup_compression: "{{ backup_compression | default(true) }}"
+    
+    # Configurações de consultas
+    query_timeout: "{{ query_timeout | default(300) }}"
+    max_rows_display: "{{ max_rows_display | default(100) }}"
+
+  pre_tasks:
+    - name: Verificar conectividade com PostgreSQL
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: psql -tAc "SELECT 1;"
+      register: pg_connectivity
+      failed_when: false
+
+    - name: Falhar se PostgreSQL não estiver acessível
+      ansible.builtin.fail:
+        msg: "PostgreSQL não está acessível. Verifique se o serviço está rodando."
+      when: pg_connectivity.rc != 0
+
+  tasks:
+    # ===== OPERAÇÕES DE CONSULTA =====
+    - name: Executar consulta personalizada
+      when: custom_query is defined
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        psql -d {{ target_database }} -tAc "{{ custom_query }}"
+      register: custom_query_result
+      changed_when: false
+
+    - name: Listar bancos de dados
+      when: operation == 'list_databases'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT datname, pg_size_pretty(pg_database_size(datname)), 
+                          pg_catalog.pg_get_userbyid(datdba) as owner
+                   FROM pg_database 
+                   WHERE datistemplate = false 
+                   ORDER BY datname;"
+      register: databases_list
+      changed_when: false
+
+    - name: Listar usuários (roles)
+      when: operation == 'list_users'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT rolname, rolsuper, rolcanlogin, rolconnlimit, rolvaliduntil 
+                   FROM pg_roles 
+                   WHERE rolcanlogin = true 
+                   ORDER BY rolname;"
+      register: users_list
+      changed_when: false
+
+    - name: Listar tabelas
+      when: operation == 'list_tables'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -d {{ target_database }} -tAc 
+        "SELECT schemaname, tablename, tableowner, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+         FROM pg_tables 
+         WHERE schemaname NOT IN ('pg_catalog', 'information_schema') 
+         ORDER BY schemaname, tablename;"
+      register: tables_list
+      changed_when: false
+
+    - name: Listar conexões ativas
+      when: operation == 'list_connections'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT pid, usename, datname, state, wait_event_type, wait_event, 
+                          now()-xact_start AS xact_age, left(query,80) AS query
+                   FROM pg_stat_activity 
+                   WHERE state IS NOT NULL 
+                   ORDER BY xact_start NULLS LAST;"
+      register: connections_list
+      changed_when: false
+
+    - name: Verificar locks
+      when: operation == 'check_locks'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT l.pid, l.mode, l.granted, a.usename, a.datname, a.query
+                   FROM pg_locks l
+                   JOIN pg_stat_activity a ON l.pid = a.pid
+                   WHERE l.mode NOT LIKE '%AccessShareLock%'
+                   ORDER BY l.pid;"
+      register: locks_check
+      changed_when: false
+
+    # ===== OPERAÇÕES DE MANUTENÇÃO =====
+    - name: Executar VACUUM
+      when: operation == 'vacuum'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        psql -d {{ target_database }} -c "VACUUM {{ 'ANALYZE' if vacuum_analyze | default(false) else '' }};"
+      register: vacuum_result
+
+    - name: Executar ANALYZE
+      when: operation == 'analyze'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        psql -d {{ target_database }} -c "ANALYZE;"
+      register: analyze_result
+
+    - name: Executar REINDEX
+      when: operation == 'reindex'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        psql -d {{ target_database }} -c "REINDEX DATABASE {{ target_database }};"
+      register: reindex_result
+
+    - name: Verificar integridade do banco
+      when: operation == 'check_integrity'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        psql -d {{ target_database }} -c "SELECT pg_check_visible(oid) FROM pg_class WHERE relkind = 'r';"
+      register: integrity_check
+      changed_when: false
+
+    # ===== OPERAÇÕES DE BACKUP =====
+    - name: Criar diretório de backup
+      when: operation == 'backup'
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0755"
+        owner: "{{ pg_user }}"
+        group: "{{ pg_user }}"
+
+    - name: Executar backup completo
+      when: operation == 'backup'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        pg_dump -h localhost -p {{ pg_port }} -U {{ pg_user }} 
+        {% if backup_format == 'custom' %}--format=custom{% elif backup_format == 'directory' %}--format=directory{% else %}--format=plain{% endif %}
+        {% if backup_compression %}--compress=9{% endif %}
+        --verbose --file={{ backup_dir }}/backup_{{ target_database }}_{{ ansible_date_time.epoch }}.dump
+        {{ target_database }}
+      register: backup_result
+
+    - name: Executar backup de tabela específica
+      when: operation == 'backup_table' and target_table is defined
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        pg_dump -h localhost -p {{ pg_port }} -U {{ pg_user }} 
+        --table={{ target_schema }}.{{ target_table }}
+        --format=plain
+        --verbose --file={{ backup_dir }}/backup_{{ target_database }}_{{ target_table }}_{{ ansible_date_time.epoch }}.sql
+        {{ target_database }}
+      register: backup_table_result
+
+    # ===== OPERAÇÕES DE RESTAURAÇÃO =====
+    - name: Restaurar backup
+      when: operation == 'restore' and backup_file is defined
+      become_user: "{{ pg_user }}"
+      ansible.builtin.shell: >
+        pg_restore -h localhost -p {{ pg_port }} -U {{ pg_user }} 
+        --verbose --clean --if-exists
+        {% if target_database != 'postgres' %}--dbname={{ target_database }}{% endif %}
+        {{ backup_dir }}/{{ backup_file }}
+      register: restore_result
+
+    # ===== OPERAÇÕES DE PERFORMANCE =====
+    - name: Verificar estatísticas de tabelas
+      when: operation == 'table_stats'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -d {{ target_database }} -tAc 
+        "SELECT schemaname, tablename, n_tup_ins, n_tup_upd, n_tup_del, 
+                n_live_tup, n_dead_tup, last_vacuum, last_autovacuum,
+                last_analyze, last_autoanalyze
+         FROM pg_stat_user_tables 
+         ORDER BY n_dead_tup DESC;"
+      register: table_stats
+      changed_when: false
+
+    - name: Verificar estatísticas de índices
+      when: operation == 'index_stats'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -d {{ target_database }} -tAc 
+        "SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read, idx_tup_fetch
+         FROM pg_stat_user_indexes 
+         ORDER BY idx_scan DESC;"
+      register: index_stats
+      changed_when: false
+
+    - name: Verificar queries lentas
+      when: operation == 'slow_queries'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -d {{ target_database }} -tAc 
+        "SELECT query, calls, total_time, mean_time, rows
+         FROM pg_stat_statements 
+         ORDER BY total_time DESC 
+         LIMIT {{ max_rows_display }};"
+      register: slow_queries
+      changed_when: false
+
+    # ===== OPERAÇÕES DE SEGURANÇA =====
+    - name: Verificar usuários sem senha
+      when: operation == 'check_passwords'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT rolname FROM pg_roles WHERE rolpassword IS NULL AND rolcanlogin=true;"
+      register: password_check
+      changed_when: false
+
+    - name: Verificar privilégios de usuários
+      when: operation == 'check_privileges'
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -d {{ target_database }} -tAc 
+        "SELECT grantee, privilege_type, table_name 
+         FROM information_schema.role_table_grants 
+         WHERE table_schema = '{{ target_schema }}'
+         ORDER BY grantee, table_name;"
+      register: privileges_check
+      changed_when: false
+
+  post_tasks:
+    - name: Exibir resultados da consulta personalizada
+      when: custom_query is defined and custom_query_result is defined
+      ansible.builtin.debug:
+        msg: |
+          === CONSULTA PERSONALIZADA ===
+          Query: {{ custom_query }}
+          Resultado:
+          {{ custom_query_result.stdout_lines | join('\n') }}
+
+    - name: Exibir lista de bancos
+      when: operation == 'list_databases' and databases_list is defined
+      ansible.builtin.debug:
+        msg: |
+          === BANCOS DE DADOS ===
+          {{ databases_list.stdout_lines | join('\n') }}
+
+    - name: Exibir lista de usuários
+      when: operation == 'list_users' and users_list is defined
+      ansible.builtin.debug:
+        msg: |
+          === USUÁRIOS ===
+          {{ users_list.stdout_lines | join('\n') }}
+
+    - name: Exibir lista de tabelas
+      when: operation == 'list_tables' and tables_list is defined
+      ansible.builtin.debug:
+        msg: |
+          === TABELAS ===
+          {{ tables_list.stdout_lines | join('\n') }}
+
+    - name: Exibir conexões ativas
+      when: operation == 'list_connections' and connections_list is defined
+      ansible.builtin.debug:
+        msg: |
+          === CONEXÕES ATIVAS ===
+          {{ connections_list.stdout_lines | join('\n') }}
+
+    - name: Exibir verificação de locks
+      when: operation == 'check_locks' and locks_check is defined
+      ansible.builtin.debug:
+        msg: |
+          === LOCKS ===
+          {{ locks_check.stdout_lines | join('\n') }}
+
+    - name: Exibir resultado do backup
+      when: operation == 'backup' and backup_result is defined
+      ansible.builtin.debug:
+        msg: |
+          === BACKUP ===
+          Status: {{ 'SUCESSO' if backup_result.rc == 0 else 'FALHA' }}
+          Arquivo: {{ backup_result.cmd.split()[-1] if backup_result.cmd else 'N/A' }}
+
+    - name: Exibir estatísticas de tabelas
+      when: operation == 'table_stats' and table_stats is defined
+      ansible.builtin.debug:
+        msg: |
+          === ESTATÍSTICAS DE TABELAS ===
+          {{ table_stats.stdout_lines | join('\n') }}
+
+    - name: Exibir estatísticas de índices
+      when: operation == 'index_stats' and index_stats is defined
+      ansible.builtin.debug:
+        msg: |
+          === ESTATÍSTICAS DE ÍNDICES ===
+          {{ index_stats.stdout_lines | join('\n') }}
+
+    - name: Exibir queries lentas
+      when: operation == 'slow_queries' and slow_queries is defined
+      ansible.builtin.debug:
+        msg: |
+          === QUERIES LENTAS ===
+          {{ slow_queries.stdout_lines | join('\n') }}
+
+    - name: Exibir verificação de senhas
+      when: operation == 'check_passwords' and password_check is defined
+      ansible.builtin.debug:
+        msg: |
+          === USUÁRIOS SEM SENHA ===
+          {{ password_check.stdout_lines | join('\n') if password_check.stdout_lines else 'Nenhum usuário sem senha encontrado' }}
+
+    - name: Exibir verificação de privilégios
+      when: operation == 'check_privileges' and privileges_check is defined
+      ansible.builtin.debug:
+        msg: |
+          === PRIVILÉGIOS ===
+          {{ privileges_check.stdout_lines | join('\n') }}

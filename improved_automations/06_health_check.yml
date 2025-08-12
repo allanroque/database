@@ -1,0 +1,291 @@
+---
+- name: Health Check Completo do PostgreSQL
+  hosts: db_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # Configurações do health check
+    pg_user: "postgres"
+    pg_port: "{{ pg_port | default(5432) }}"
+    pg_data_dir: "{{ pg_data_dir | default('/var/lib/pgsql/data') }}"
+    
+    # Configurações de relatório
+    health_check_output_dir: "/tmp/pg-health"
+    health_check_output_file: "health_report.json"
+    health_check_html_file: "health_report.html"
+    
+    # Configurações de coleta
+    log_tail_lines: 200
+    collect_system_metrics: true
+    collect_performance_metrics: true
+    collect_security_metrics: true
+    
+    # Configurações de alertas
+    alert_on_errors: true
+    alert_on_warnings: true
+    alert_email: "{{ alert_email | default('admin@example.com') }}"
+    
+    # Limites de alerta
+    max_connections_threshold: 80
+    disk_usage_threshold: 85
+    memory_usage_threshold: 80
+    cpu_usage_threshold: 80
+
+  pre_tasks:
+    - name: Criar diretório de saída
+      ansible.builtin.file:
+        path: "{{ health_check_output_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Verificar conectividade com PostgreSQL
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: psql -tAc "SELECT 1;"
+      register: pg_connectivity
+      failed_when: false
+
+  tasks:
+    # ===== COLETA DE MÉTRICAS DO SISTEMA =====
+    - name: Coletar métricas do sistema operacional
+      when: collect_system_metrics | bool
+      block:
+        - name: Informações básicas do sistema
+          ansible.builtin.set_fact:
+            system_info:
+              hostname: "{{ ansible_facts.hostname }}"
+              os_family: "{{ ansible_facts.os_family }}"
+              distribution: "{{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}"
+              kernel: "{{ ansible_facts.kernel }} {{ ansible_facts.kernel_release }}"
+              architecture: "{{ ansible_facts.architecture }}"
+              uptime_seconds: "{{ ansible_facts.uptime_seconds }}"
+              cpu_count: "{{ ansible_facts.processor_vcpus | default(ansible_facts.processor_count) }}"
+              memory_total_mb: "{{ ansible_facts.memtotal_mb }}"
+              memory_available_mb: "{{ ansible_facts.memavailable_mb | default(0) }}"
+
+        - name: Calcular uptime em formato humano
+          ansible.builtin.set_fact:
+            uptime_human: >-
+              {{ (ansible_facts.uptime_seconds | int) // 86400 }}d
+              {{ ((ansible_facts.uptime_seconds | int) % 86400) // 3600 }}h
+              {{ (((ansible_facts.uptime_seconds | int) % 3600) // 60) }}m
+
+        - name: Coletar uso de disco
+          ansible.builtin.command: df -h "{{ pg_data_dir | dirname }}"
+          register: disk_usage
+          changed_when: false
+
+        - name: Coletar uso de memória
+          ansible.builtin.shell: free -m
+          register: memory_usage
+          changed_when: false
+
+        - name: Coletar uso de CPU
+          ansible.builtin.shell: top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1
+          register: cpu_usage
+          changed_when: false
+
+        - name: Coletar processos PostgreSQL
+          ansible.builtin.shell: ps aux | grep postgres | grep -v grep | wc -l
+          register: pg_processes
+          changed_when: false
+
+    # ===== COLETA DE MÉTRICAS DO POSTGRESQL =====
+    - name: Coletar métricas do PostgreSQL
+      when: pg_connectivity.rc == 0
+      block:
+        - name: Informações básicas do PostgreSQL
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            echo "=== VERSÃO ==="
+            psql -tAc "SELECT version();"
+            echo "=== CONFIGURAÇÕES ==="
+            psql -tAc "SHOW config_file;"
+            psql -tAc "SHOW hba_file;"
+            psql -tAc "SHOW data_directory;"
+            psql -tAc "SHOW log_directory;"
+            psql -tAc "SHOW listen_addresses;"
+            psql -tAc "SHOW port;"
+          register: pg_basic_info
+          changed_when: false
+
+        - name: Status do serviço PostgreSQL
+          ansible.builtin.systemd:
+            name: postgresql
+          register: pg_service_status
+
+        - name: Conexões e estados
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            echo "=== CONEXÕES ==="
+            psql -tAc "SHOW max_connections;"
+            psql -tAc "SELECT count(*) FROM pg_stat_activity;"
+            psql -tAc "SELECT state, count(*) FROM pg_stat_activity GROUP BY state;"
+            echo "=== IDLE IN TRANSACTION ==="
+            psql -tAc "SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction';"
+          register: pg_connections
+          changed_when: false
+
+        - name: Bancos de dados e usuários
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            echo "=== BANCOS DE DADOS ==="
+            psql -tAc "SELECT datname, pg_size_pretty(pg_database_size(datname)) FROM pg_database WHERE datistemplate=false ORDER BY 2 DESC;"
+            echo "=== USUÁRIOS ==="
+            psql -tAc "SELECT rolname, rolsuper, rolcanlogin, rolconnlimit FROM pg_roles WHERE rolcanlogin=true ORDER BY rolname;"
+          register: pg_databases_users
+          changed_when: false
+
+        - name: Performance e WAL
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            echo "=== PERFORMANCE ==="
+            psql -tAc "SHOW shared_buffers;"
+            psql -tAc "SHOW work_mem;"
+            psql -tAc "SHOW maintenance_work_mem;"
+            psql -tAc "SHOW effective_cache_size;"
+            echo "=== WAL ==="
+            psql -tAc "SHOW wal_level;"
+            psql -tAc "SHOW max_wal_size;"
+            psql -x -c "SELECT checkpoints_timed, checkpoints_req, buffers_checkpoint, buffers_clean, maxwritten_clean, buffers_backend FROM pg_stat_bgwriter;"
+          register: pg_performance
+          changed_when: false
+
+        - name: Replicação (se aplicável)
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            echo "=== REPLICAÇÃO ==="
+            psql -tAc "SELECT pg_is_in_recovery();"
+            psql -x -c "SELECT client_addr, state, sync_state, write_lag, flush_lag, replay_lag FROM pg_stat_replication;" 2>/dev/null || echo "Sem replicação ativa"
+          register: pg_replication
+          changed_when: false
+
+        - name: Logs e erros recentes
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            LOGDIR=$(psql -tAc "SHOW log_directory;" | tr -d ' ')
+            if [ -n "$LOGDIR" ]; then
+              LAST=$(ls -1t "{{ pg_data_dir }}/$LOGDIR" 2>/dev/null | head -1)
+              if [ -n "$LAST" ]; then
+                echo "=== ÚLTIMOS ERROS ==="
+                tail -n {{ log_tail_lines }} "{{ pg_data_dir }}/$LOGDIR/$LAST" | egrep -i "ERROR|FATAL|PANIC" || echo "Nenhum erro encontrado"
+              fi
+            fi
+          register: pg_logs
+          changed_when: false
+
+    # ===== COLETA DE MÉTRICAS DE SEGURANÇA =====
+    - name: Coletar métricas de segurança
+      when: collect_security_metrics | bool
+      block:
+        - name: Verificar configurações de segurança
+          become_user: "{{ pg_user }}"
+          ansible.builtin.shell: |
+            echo "=== SEGURANÇA ==="
+            psql -tAc "SHOW ssl;" 2>/dev/null || echo "SSL: n/a"
+            psql -tAc "SHOW password_encryption;"
+            psql -tAc "SELECT count(*) FROM pg_roles WHERE rolpassword IS NULL AND rolcanlogin=true;"
+          register: pg_security
+          changed_when: false
+
+        - name: Verificar pg_hba.conf
+          ansible.builtin.shell: |
+            HBA_FILE=$(sudo -u postgres psql -tAc "SHOW hba_file;" 2>/dev/null | tr -d ' ')
+            if [ -n "$HBA_FILE" ] && [ -r "$HBA_FILE" ]; then
+              echo "=== PG_HBA.CONF (primeiras 20 linhas) ==="
+              head -20 "$HBA_FILE"
+            fi
+          register: pg_hba_check
+          changed_when: false
+
+    # ===== ANÁLISE E ALERTAS =====
+    - name: Analisar métricas e gerar alertas
+      ansible.builtin.set_fact:
+        health_alerts: []
+        health_warnings: []
+
+    - name: Verificar uso de conexões
+      when: 
+        - pg_connectivity.rc == 0
+        - pg_connections.stdout is defined
+        - (pg_connections.stdout | regex_search('\\d+') | int) > max_connections_threshold
+      ansible.builtin.set_fact:
+        health_alerts: "{{ health_alerts + ['Uso de conexões alto: ' + (pg_connections.stdout | regex_search('\\d+') | int | string) + ' conexões ativas'] }}"
+
+    - name: Verificar uso de disco
+      when: 
+        - disk_usage.stdout is defined
+        - (disk_usage.stdout | regex_search('\\d+%') | regex_replace('%', '') | int) > disk_usage_threshold
+      ansible.builtin.set_fact:
+        health_warnings: "{{ health_warnings + ['Uso de disco alto: ' + (disk_usage.stdout | regex_search('\\d+%') | string)] }}"
+
+    - name: Verificar erros nos logs
+      when: pg_logs.stdout is defined and pg_logs.stdout != "Nenhum erro encontrado"
+      ansible.builtin.set_fact:
+        health_alerts: "{{ health_alerts + ['Erros encontrados nos logs do PostgreSQL'] }}"
+
+    # ===== GERAÇÃO DO RELATÓRIO =====
+    - name: Consolidar relatório de health check
+      ansible.builtin.set_fact:
+        health_report:
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          host: "{{ inventory_hostname }}"
+          postgresql_accessible: "{{ pg_connectivity.rc == 0 }}"
+          system:
+            info: "{{ system_info | default({}) }}"
+            uptime_human: "{{ uptime_human | default('') }}"
+            disk_usage: "{{ disk_usage.stdout | default('') }}"
+            memory_usage: "{{ memory_usage.stdout | default('') }}"
+            cpu_usage: "{{ cpu_usage.stdout | default('') }}"
+            pg_processes: "{{ pg_processes.stdout | default('0') }}"
+          postgresql:
+            service_status: "{{ pg_service_status.status | default({}) }}"
+            basic_info: "{{ pg_basic_info.stdout | default('') }}"
+            connections: "{{ pg_connections.stdout | default('') }}"
+            databases_users: "{{ pg_databases_users.stdout | default('') }}"
+            performance: "{{ pg_performance.stdout | default('') }}"
+            replication: "{{ pg_replication.stdout | default('') }}"
+            logs: "{{ pg_logs.stdout | default('') }}"
+            security: "{{ pg_security.stdout | default('') }}"
+            hba_config: "{{ pg_hba_check.stdout | default('') }}"
+          alerts:
+            critical: "{{ health_alerts | default([]) }}"
+            warnings: "{{ health_warnings | default([]) }}"
+          summary:
+            total_alerts: "{{ (health_alerts | default([])) | length }}"
+            total_warnings: "{{ (health_warnings | default([])) | length }}"
+            overall_status: "{{ 'CRITICAL' if (health_alerts | default([])) | length > 0 else ('WARNING' if (health_warnings | default([])) | length > 0 else 'HEALTHY') }}"
+
+    - name: Salvar relatório JSON
+      ansible.builtin.copy:
+        dest: "{{ health_check_output_dir }}/{{ health_check_output_file }}"
+        content: "{{ health_report | to_nice_json }}"
+        mode: "0644"
+
+    - name: Gerar relatório HTML
+      ansible.builtin.template:
+        src: templates/health_report.html.j2
+        dest: "{{ health_check_output_dir }}/{{ health_check_html_file }}"
+        mode: "0644"
+
+  post_tasks:
+    - name: Exibir resumo do health check
+      ansible.builtin.debug:
+        msg: |
+          === HEALTH CHECK COMPLETO ===
+          Host: {{ inventory_hostname }}
+          Status: {{ health_report.summary.overall_status }}
+          PostgreSQL: {{ 'ACESSÍVEL' if health_report.postgresql_accessible else 'INACESSÍVEL' }}
+          Alertas Críticos: {{ health_report.summary.total_alerts }}
+          Avisos: {{ health_report.summary.total_warnings }}
+          Relatórios salvos em: {{ health_check_output_dir }}
+
+    - name: Exibir alertas críticos
+      when: health_alerts | length > 0
+      ansible.builtin.debug:
+        msg: "ALERTAS CRÍTICOS: {{ health_alerts }}"
+
+    - name: Exibir avisos
+      when: health_warnings | length > 0
+      ansible.builtin.debug:
+        msg: "AVISOS: {{ health_warnings }}"

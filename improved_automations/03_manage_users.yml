@@ -1,0 +1,127 @@
+---
+- name: Gerenciamento de Usuários PostgreSQL
+  hosts: db_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    # Configurações padrão
+    pg_user: "postgres"
+    pg_port: "{{ pg_port | default(5432) }}"
+    
+    # Perfis de acesso disponíveis
+    access_profiles:
+      readonly:
+        schema_privileges: "USAGE"
+        table_privileges: "SELECT"
+        sequence_privileges: "USAGE, SELECT"
+        default_table_privileges: "SELECT"
+        default_sequence_privileges: "USAGE, SELECT"
+        connection_limit: 10
+        statement_timeout: "5min"
+        search_path: "public"
+        
+      readwrite:
+        schema_privileges: "USAGE, CREATE"
+        table_privileges: "SELECT, INSERT, UPDATE, DELETE"
+        sequence_privileges: "USAGE, SELECT, UPDATE"
+        default_table_privileges: "SELECT, INSERT, UPDATE, DELETE"
+        default_sequence_privileges: "USAGE, SELECT, UPDATE"
+        connection_limit: 20
+        statement_timeout: "10min"
+        search_path: "public"
+        
+      admin:
+        schema_privileges: "ALL"
+        table_privileges: "ALL PRIVILEGES"
+        sequence_privileges: "ALL PRIVILEGES"
+        default_table_privileges: "ALL PRIVILEGES"
+        default_sequence_privileges: "ALL PRIVILEGES"
+        connection_limit: 50
+        statement_timeout: "30min"
+        search_path: "public"
+
+    # Lista de usuários a serem criados/gerenciados
+    db_users:
+      - username: "app_user1"
+        password: "{{ vault_app_user1_password | default('ChangeMe123!') }}"
+        profile: "readwrite"
+        databases: ["app1", "app2"]
+        schemas: ["public"]
+        valid_until: "infinity"
+        comment: "Usuário da aplicação principal"
+        
+      - username: "readonly_user"
+        password: "{{ vault_readonly_user_password | default('ReadOnly123!') }}"
+        profile: "readonly"
+        databases: ["app1", "app2", "financeiro"]
+        schemas: ["public"]
+        valid_until: "infinity"
+        comment: "Usuário somente leitura"
+        
+      - username: "admin_user"
+        password: "{{ vault_admin_user_password | default('Admin123!') }}"
+        profile: "admin"
+        databases: ["app1"]
+        schemas: ["public", "admin"]
+        valid_until: "2025-12-31"
+        comment: "Usuário administrador"
+
+  pre_tasks:
+    - name: Validar configurações de usuários
+      ansible.builtin.assert:
+        that:
+          - item.username is defined
+          - item.password is defined
+          - item.profile is defined
+          - item.profile in access_profiles.keys()
+        fail_msg: "Configuração inválida para usuário {{ item.username }}"
+      loop: "{{ db_users }}"
+
+    - name: Verificar conectividade com PostgreSQL
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: psql -tAc "SELECT 1;"
+      register: pg_connectivity
+      failed_when: false
+
+    - name: Falhar se PostgreSQL não estiver acessível
+      ansible.builtin.fail:
+        msg: "PostgreSQL não está acessível. Verifique se o serviço está rodando."
+      when: pg_connectivity.rc != 0
+
+  tasks:
+    - name: Coletar usuários existentes
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT rolname FROM pg_roles WHERE rolcanlogin = true;"
+      register: existing_users
+      changed_when: false
+
+    - name: Processar cada usuário
+      ansible.builtin.include_tasks: tasks/manage_single_user.yml
+      loop: "{{ db_users }}"
+      loop_control:
+        loop_var: current_user
+
+  post_tasks:
+    - name: Verificar usuários criados
+      become_user: "{{ pg_user }}"
+      ansible.builtin.command: >
+        psql -tAc "SELECT rolname, rolcanlogin, rolconnlimit, rolvaliduntil 
+                   FROM pg_roles 
+                   WHERE rolcanlogin = true 
+                   ORDER BY rolname;"
+      register: final_users_check
+      changed_when: false
+
+    - name: Exibir resumo dos usuários
+      ansible.builtin.debug:
+        msg: |
+          Usuários PostgreSQL:
+          {{ final_users_check.stdout_lines | join('\n') }}
+
+  handlers:
+    - name: reload postgresql
+      ansible.builtin.systemd:
+        name: postgresql
+        state: reloaded

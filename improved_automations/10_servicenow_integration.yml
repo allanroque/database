@@ -1,0 +1,212 @@
+---
+- name: Integração com ServiceNow para Mudanças de Banco de Dados
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    # Configurações do ServiceNow
+    snow_instance: "{{ snow_instance | default('https://your-instance.service-now.com') }}"
+    snow_username: "{{ snow_username | default('ansible_user') }}"
+    snow_password: "{{ snow_password | default('') }}"
+    
+    # Configurações padrão de mudança
+    change_defaults:
+      impact: "{{ change_impact | default('low') }}"
+      urgency: "{{ change_urgency | default('low') }}"
+      category: "{{ change_category | default('database') }}"
+      type: "{{ change_type | default('normal') }}"
+      priority: "{{ change_priority | default('3') }}"
+      
+    # Configurações de notificação
+    notify_on_change: "{{ notify_on_change | default(true) }}"
+    notification_email: "{{ notification_email | default('dba@company.com') }}"
+    
+    # Configurações de aprovação
+    require_approval: "{{ require_approval | default(false) }}"
+    approver_group: "{{ approver_group | default('Database Administrators') }}"
+
+  collections:
+    - servicenow.itsm
+
+  pre_tasks:
+    - name: Validar configurações do ServiceNow
+      ansible.builtin.assert:
+        that:
+          - snow_instance is defined
+          - snow_username is defined
+          - snow_password is defined
+        fail_msg: "Configurações do ServiceNow não estão definidas. Configure snow_instance, snow_username e snow_password."
+
+    - name: Definir informações da mudança
+      ansible.builtin.set_fact:
+        change_info:
+          short_description: "{{ change_short_description | default('Mudança de Banco de Dados via Ansible') }}"
+          description: "{{ change_description | default('Mudança automatizada de banco de dados PostgreSQL executada via Ansible.') }}"
+          impact: "{{ change_defaults.impact }}"
+          urgency: "{{ change_defaults.urgency }}"
+          category: "{{ change_defaults.category }}"
+          type: "{{ change_defaults.type }}"
+          priority: "{{ change_defaults.priority }}"
+          start_date: "{{ change_start_date | default('') }}"
+          end_date: "{{ change_end_date | default('') }}"
+          risk: "{{ change_risk | default('low') }}"
+          change_plan: "{{ change_plan | default('Execução automatizada de mudanças no banco de dados PostgreSQL.') }}"
+          test_plan: "{{ change_test_plan | default('Validação automática após execução das mudanças.') }}"
+          rollback_plan: "{{ change_rollback_plan | default('Rollback automático disponível via Ansible.') }}"
+
+  tasks:
+    - name: Criar requisição de mudança no ServiceNow
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_instance }}"
+          username: "{{ snow_username }}"
+          password: "{{ snow_password }}"
+        state: new
+        short_description: "{{ change_info.short_description }}"
+        description: "{{ change_info.description }}"
+        impact: "{{ change_info.impact }}"
+        urgency: "{{ change_info.urgency }}"
+        category: "{{ change_info.category }}"
+        type: "{{ change_info.type }}"
+        priority: "{{ change_info.priority }}"
+        risk: "{{ change_info.risk }}"
+        change_plan: "{{ change_info.change_plan }}"
+        test_plan: "{{ change_info.test_plan }}"
+        rollback_plan: "{{ change_info.rollback_plan }}"
+        other:
+          start_date: "{{ change_info.start_date }}"
+          end_date: "{{ change_info.end_date }}"
+          assignment_group: "{{ approver_group }}"
+          requested_by: "{{ snow_username }}"
+      register: new_change_request
+      when: change_operation == 'create'
+
+    - name: Atualizar requisição de mudança existente
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_instance }}"
+          username: "{{ snow_username }}"
+          password: "{{ snow_password }}"
+        number: "{{ change_number }}"
+        state: "{{ change_state | default('in_progress') }}"
+        work_notes: "{{ change_work_notes | default('Atualização via Ansible') }}"
+        other:
+          work_notes: "{{ change_work_notes | default('Atualização via Ansible') }}"
+      register: updated_change_request
+      when: change_operation == 'update'
+
+    - name: Fechar requisição de mudança
+      servicenow.itsm.change_request:
+        instance:
+          host: "{{ snow_instance }}"
+          username: "{{ snow_username }}"
+          password: "{{ snow_password }}"
+        number: "{{ change_number }}"
+        state: closed
+        close_code: "{{ change_close_code | default('Successful') }}"
+        close_notes: "{{ change_close_notes | default('Mudança concluída com sucesso via Ansible') }}"
+        other:
+          work_notes: "{{ change_close_notes | default('Mudança concluída com sucesso via Ansible') }}"
+      register: closed_change_request
+      when: change_operation == 'close'
+
+    - name: Buscar requisição de mudança
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ snow_instance }}"
+          username: "{{ snow_username }}"
+          password: "{{ snow_password }}"
+        number: "{{ change_number }}"
+      register: change_request_info
+      when: change_operation == 'get'
+
+    - name: Listar requisições de mudança
+      servicenow.itsm.change_request_info:
+        instance:
+          host: "{{ snow_instance }}"
+          username: "{{ snow_username }}"
+          password: "{{ snow_password }}"
+        query: "{{ change_query | default('state!=closed^sys_created_on>=javascript:gs.daysAgo(7)') }}"
+        limit: "{{ change_limit | default(10) }}"
+      register: change_requests_list
+      when: change_operation == 'list'
+
+  post_tasks:
+    - name: Exibir informações da mudança criada
+      when: change_operation == 'create' and new_change_request is defined
+      ansible.builtin.debug:
+        msg: |
+          === MUDANÇA CRIADA NO SERVICENOW ===
+          Número: {{ new_change_request.record.number }}
+          Estado: {{ new_change_request.record.state }}
+          Descrição: {{ new_change_request.record.short_description }}
+          Impacto: {{ new_change_request.record.impact }}
+          Urgência: {{ new_change_request.record.urgency }}
+          Categoria: {{ new_change_request.record.category }}
+          URL: {{ snow_instance }}/nav_to.do?uri=change_request.do?sys_id={{ new_change_request.record.sys_id }}
+
+    - name: Exibir informações da mudança atualizada
+      when: change_operation == 'update' and updated_change_request is defined
+      ansible.builtin.debug:
+        msg: |
+          === MUDANÇA ATUALIZADA NO SERVICENOW ===
+          Número: {{ updated_change_request.record.number }}
+          Estado: {{ updated_change_request.record.state }}
+          Notas de Trabalho: {{ updated_change_request.record.work_notes }}
+
+    - name: Exibir informações da mudança fechada
+      when: change_operation == 'close' and closed_change_request is defined
+      ansible.builtin.debug:
+        msg: |
+          === MUDANÇA FECHADA NO SERVICENOW ===
+          Número: {{ closed_change_request.record.number }}
+          Estado: {{ closed_change_request.record.state }}
+          Código de Fechamento: {{ closed_change_request.record.close_code }}
+          Notas de Fechamento: {{ closed_change_request.record.close_notes }}
+
+    - name: Exibir informações da mudança buscada
+      when: change_operation == 'get' and change_request_info is defined
+      ansible.builtin.debug:
+        msg: |
+          === MUDANÇA BUSCADA NO SERVICENOW ===
+          Número: {{ change_request_info.records[0].number }}
+          Estado: {{ change_request_info.records[0].state }}
+          Descrição: {{ change_request_info.records[0].short_description }}
+          Impacto: {{ change_request_info.records[0].impact }}
+          Urgência: {{ change_request_info.records[0].urgency }}
+
+    - name: Exibir lista de mudanças
+      when: change_operation == 'list' and change_requests_list is defined
+      ansible.builtin.debug:
+        msg: |
+          === LISTA DE MUDANÇAS NO SERVICENOW ===
+          {% for change in change_requests_list.records %}
+          {{ loop.index }}. {{ change.number }} - {{ change.short_description }} ({{ change.state }})
+          {% endfor %}
+
+    - name: Definir variáveis de saída
+      ansible.builtin.set_fact:
+        snow_change_number: "{{ new_change_request.record.number if change_operation == 'create' and new_change_request is defined else (closed_change_request.record.number if change_operation == 'close' and closed_change_request is defined else '') }}"
+        snow_change_sys_id: "{{ new_change_request.record.sys_id if change_operation == 'create' and new_change_request is defined else (closed_change_request.record.sys_id if change_operation == 'close' and closed_change_request is defined else '') }}"
+
+  handlers:
+    - name: notificar mudança criada
+      when: notify_on_change | bool and change_operation == 'create'
+      ansible.builtin.mail:
+        host: "{{ smtp_host | default('localhost') }}"
+        port: "{{ smtp_port | default(25) }}"
+        username: "{{ smtp_username | default('') }}"
+        password: "{{ smtp_password | default('') }}"
+        to: "{{ notification_email }}"
+        subject: "Nova Mudança Criada: {{ new_change_request.record.number }}"
+        body: |
+          Uma nova requisição de mudança foi criada no ServiceNow:
+          
+          Número: {{ new_change_request.record.number }}
+          Descrição: {{ new_change_request.record.short_description }}
+          Estado: {{ new_change_request.record.state }}
+          Impacto: {{ new_change_request.record.impact }}
+          Urgência: {{ new_change_request.record.urgency }}
+          
+          URL: {{ snow_instance }}/nav_to.do?uri=change_request.do?sys_id={{ new_change_request.record.sys_id }}

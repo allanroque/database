@@ -1,0 +1,189 @@
+---
+- name: Instalação e Configuração do SQL Server no Windows Server
+  hosts: windows_db_servers
+  gather_facts: true
+
+  vars:
+    # Configurações do SQL Server
+    sql_server_version: "{{ sql_server_version | default('2019') }}"
+    sql_server_edition: "{{ sql_server_edition | default('Developer') }}"  # Developer, Express, Standard, Enterprise
+    sql_server_instance: "{{ sql_server_instance | default('MSSQLSERVER') }}"
+    sql_server_port: "{{ sql_server_port | default(1433) }}"
+    
+    # Configurações de instalação
+    sql_install_path: "{{ sql_install_path | default('C:\\Program Files\\Microsoft SQL Server') }}"
+    sql_data_path: "{{ sql_data_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA') }}"
+    sql_log_path: "{{ sql_log_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\DATA') }}"
+    sql_backup_path: "{{ sql_backup_path | default('C:\\Program Files\\Microsoft SQL Server\\MSSQL15.MSSQLSERVER\\MSSQL\\Backup') }}"
+    
+    # Configurações de autenticação
+    sql_authentication_mode: "{{ sql_authentication_mode | default('Mixed') }}"  # Windows, Mixed
+    sql_sa_password: "{{ vault_sql_sa_password | default('ChangeMe123!') }}"
+    
+    # Configurações de serviço
+    sql_service_account: "{{ sql_service_account | default('NT AUTHORITY\\SYSTEM') }}"
+    sql_agent_service_account: "{{ sql_agent_service_account | default('NT AUTHORITY\\NETWORK SERVICE') }}"
+    
+    # Configurações de performance
+    sql_max_memory: "{{ sql_max_memory | default('2048') }}"  # MB
+    sql_min_memory: "{{ sql_min_memory | default('512') }}"   # MB
+    sql_max_degree_of_parallelism: "{{ sql_max_degree_of_parallelism | default('0') }}"
+    
+    # Configurações de rede
+    sql_tcp_enabled: "{{ sql_tcp_enabled | default(true) }}"
+    sql_named_pipes_enabled: "{{ sql_named_pipes_enabled | default(false) }}"
+    sql_shared_memory_enabled: "{{ sql_shared_memory_enabled | default(true) }}"
+    
+    # Configurações de segurança
+    sql_force_encryption: "{{ sql_force_encryption | default(false) }}"
+    sql_certificate_thumbprint: "{{ sql_certificate_thumbprint | default('') }}"
+
+  pre_tasks:
+    - name: Verificar se SQL Server já está instalado
+      win_reg_stat:
+        path: HKLM:\SOFTWARE\Microsoft\Microsoft SQL Server\InstalledInstances
+      register: sql_installed_check
+
+    - name: Definir se SQL Server precisa ser instalado
+      set_fact:
+        sql_needs_install: "{{ sql_server_instance not in sql_installed_check.value }}"
+
+  tasks:
+    - name: Verificar se o Windows Server é suportado
+      win_shell: |
+        $os = Get-WmiObject -Class Win32_OperatingSystem
+        Write-Output $os.Caption
+        Write-Output $os.Version
+      register: windows_version
+      when: sql_needs_install
+
+    - name: Baixar SQL Server ISO/Installer
+      win_get_url:
+        url: "{{ sql_download_url | default('https://download.microsoft.com/download/8/4/c/84c6c430-e0f5-476d-bfd9-6b46b431010f/SQLServer2019-DEV-x64-ENU.exe') }}"
+        dest: "C:\\temp\\SQLServer{{ sql_server_version }}-{{ sql_server_edition }}.exe"
+      when: sql_needs_install
+
+    - name: Criar arquivo de configuração para instalação silenciosa
+      win_template:
+        src: templates/sqlserver_config.ini.j2
+        dest: "C:\\temp\\sqlserver_config.ini"
+      when: sql_needs_install
+
+    - name: Instalar SQL Server
+      win_shell: |
+        Start-Process -FilePath "C:\\temp\\SQLServer{{ sql_server_version }}-{{ sql_server_edition }}.exe" -ArgumentList "/ConfigurationFile=C:\\temp\\sqlserver_config.ini", "/IACCEPTSQLSERVERLICENSETERMS", "/Q" -Wait -PassThru
+      register: sql_install_result
+      when: sql_needs_install
+
+    - name: Aguardar SQL Server estar pronto
+      win_wait_for:
+        port: "{{ sql_server_port }}"
+        timeout: 300
+      when: sql_needs_install
+
+    - name: Habilitar TCP/IP
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $smo.Settings.LoginMode = [Microsoft.SqlServer.Management.Smo.ServerLoginMode]::Mixed
+        $smo.Alter()
+      when: 
+        - sql_needs_install
+        - sql_authentication_mode == 'Mixed'
+
+    - name: Configurar SQL Server Configuration Manager
+      win_shell: |
+        $sqlConfigPath = "C:\\Program Files\\Microsoft SQL Server\\{{ sql_server_version }}0\\Tools\\Binn\\SQLServerManager{{ sql_server_version }}.msc"
+        if (Test-Path $sqlConfigPath) {
+          # Habilitar TCP/IP
+          $tcpPath = "HKLM:\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\MSSQL{{ sql_server_version }}.MSSQLSERVER\\MSSQLServer\\SuperSocketNetLib\\Tcp\\IPAll"
+          Set-ItemProperty -Path $tcpPath -Name "TcpPort" -Value "{{ sql_server_port }}"
+          Set-ItemProperty -Path $tcpPath -Name "TcpDynamicPorts" -Value ""
+        }
+      when: sql_tcp_enabled | bool
+
+    - name: Configurar firewall para SQL Server
+      win_firewall_rule:
+        name: "SQL Server Database Engine"
+        localport: "{{ sql_server_port }}"
+        action: allow
+        direction: in
+        protocol: tcp
+        state: present
+        enabled: yes
+      when: sql_tcp_enabled | bool
+
+    - name: Configurar SQL Server Agent
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $smo.ServerInstances[0].ServerInstances[0].ServiceStartMode = [Microsoft.SqlServer.Management.Smo.ServiceStartMode]::Automatic
+        $smo.ServerInstances[0].ServerInstances[0].Alter()
+      when: sql_needs_install
+
+    - name: Configurar parâmetros de memória
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        $smo.Configuration.MaxServerMemory.ConfigValue = {{ sql_max_memory }}
+        $smo.Configuration.MinServerMemory.ConfigValue = {{ sql_min_memory }}
+        $smo.Configuration.MaxDegreeOfParallelism.ConfigValue = {{ sql_max_degree_of_parallelism }}
+        $smo.Configuration.Alter()
+      when: sql_needs_install
+
+    - name: Criar diretórios de dados
+      win_file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ sql_data_path }}"
+        - "{{ sql_log_path }}"
+        - "{{ sql_backup_path }}"
+      when: sql_needs_install
+
+    - name: Verificar instalação do SQL Server
+      win_shell: |
+        try {
+          $connection = New-Object System.Data.SqlClient.SqlConnection
+          $connection.ConnectionString = "Server=localhost;Database=master;Integrated Security=true;"
+          $connection.Open()
+          $connection.Close()
+          Write-Output "SQL Server connection successful"
+        }
+        catch {
+          Write-Output "SQL Server connection failed: $($_.Exception.Message)"
+          exit 1
+        }
+      register: sql_connection_test
+
+    - name: Verificar versão do SQL Server
+      win_shell: |
+        Import-Module SqlServer
+        $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
+        Write-Output $smo.Version
+        Write-Output $smo.Edition
+      register: sql_version_info
+      when: sql_connection_test.rc == 0
+
+  post_tasks:
+    - name: Exibir informações de instalação
+      debug:
+        msg: |
+          SQL Server instalado com sucesso!
+          Versão: {{ sql_version_info.stdout_lines[0] if sql_version_info is defined else 'N/A' }}
+          Edição: {{ sql_version_info.stdout_lines[1] if sql_version_info is defined else 'N/A' }}
+          Instância: {{ sql_server_instance }}
+          Porta: {{ sql_server_port }}
+          Modo de Autenticação: {{ sql_authentication_mode }}
+          Diretório de Dados: {{ sql_data_path }}
+
+  handlers:
+    - name: restart sql server
+      win_service:
+        name: "MSSQL${{ sql_server_instance }}"
+        state: restarted
+
+    - name: restart sql server agent
+      win_service:
+        name: "SQLAgent${{ sql_server_instance }}"
+        state: restarted

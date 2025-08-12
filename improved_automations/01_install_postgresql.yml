@@ -1,0 +1,181 @@
+---
+- name: Instalação e Configuração Inicial do PostgreSQL
+  hosts: db_servers
+  become: true
+  gather_facts: true
+  
+  vars:
+    # Configurações do PostgreSQL
+    pg_version: "{{ pg_version | default('15') }}"
+    pg_data_dir: "{{ pg_data_dir | default('/var/lib/pgsql/data') }}"
+    pg_port: "{{ pg_port | default(5432) }}"
+    pg_max_connections: "{{ pg_max_connections | default(100) }}"
+    pg_shared_buffers: "{{ pg_shared_buffers | default('256MB') }}"
+    pg_work_mem: "{{ pg_work_mem | default('4MB') }}"
+    
+    # Configurações de segurança
+    pg_ssl_enabled: "{{ pg_ssl_enabled | default(true) }}"
+    pg_ssl_cert_file: "{{ pg_ssl_cert_file | default('/etc/pki/tls/certs/postgresql.crt') }}"
+    pg_ssl_key_file: "{{ pg_ssl_key_file | default('/etc/pki/tls/private/postgresql.key') }}"
+    
+    # Configurações de log
+    pg_log_directory: "{{ pg_log_directory | default('log') }}"
+    pg_log_filename: "{{ pg_log_filename | default('postgresql-%Y-%m-%d_%H%M%S.log') }}"
+    pg_log_min_duration_statement: "{{ pg_log_min_duration_statement | default(1000) }}"
+    
+    # Configurações de performance
+    pg_wal_level: "{{ pg_wal_level | default('replica') }}"
+    pg_max_wal_size: "{{ pg_max_wal_size | default('1GB') }}"
+    pg_checkpoint_timeout: "{{ pg_checkpoint_timeout | default('5min') }}"
+    
+    # Configurações de autenticação
+    pg_hba_method: "{{ pg_hba_method | default('md5') }}"
+    pg_allow_local_connections: "{{ pg_allow_local_connections | default(true) }}"
+    pg_allow_remote_connections: "{{ pg_allow_remote_connections | default(false) }}"
+    pg_allowed_networks: "{{ pg_allowed_networks | default(['127.0.0.1/32']) }}"
+
+  pre_tasks:
+    - name: Verificar se PostgreSQL já está instalado
+      ansible.builtin.command: postgres -V
+      register: pg_version_check
+      failed_when: false
+      changed_when: false
+
+    - name: Definir se PostgreSQL precisa ser instalado
+      ansible.builtin.set_fact:
+        pg_needs_install: "{{ pg_version_check.rc != 0 }}"
+
+  tasks:
+    - name: Atualizar cache de pacotes
+      ansible.builtin.package:
+        update_cache: yes
+      when: pg_needs_install
+
+    - name: Instalar dependências do sistema
+      ansible.builtin.package:
+        name:
+          - python3-psycopg2
+          - python3-pip
+          - openssl
+          - policycoreutils-python-utils
+        state: present
+      when: pg_needs_install
+
+    - name: Instalar PostgreSQL Server
+      ansible.builtin.package:
+        name: "postgresql{{ pg_version }}-server"
+        state: present
+      when: pg_needs_install
+      register: pg_install
+
+    - name: Verificar se o cluster já foi inicializado
+      ansible.builtin.stat:
+        path: "{{ pg_data_dir }}/PG_VERSION"
+      register: pg_cluster_exists
+      when: pg_needs_install
+
+    - name: Inicializar cluster PostgreSQL
+      ansible.builtin.command: "postgresql{{ pg_version }}-setup --initdb"
+      when: 
+        - pg_needs_install
+        - not pg_cluster_exists.stat.exists
+      register: pg_initdb
+
+    - name: Criar diretório de logs
+      ansible.builtin.file:
+        path: "{{ pg_data_dir }}/{{ pg_log_directory }}"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: "0755"
+
+    - name: Configurar pg_hba.conf
+      ansible.builtin.template:
+        src: templates/pg_hba.conf.j2
+        dest: "{{ pg_data_dir }}/pg_hba.conf"
+        owner: postgres
+        group: postgres
+        mode: "0600"
+        backup: yes
+      notify: reload postgresql
+
+    - name: Configurar postgresql.conf
+      ansible.builtin.template:
+        src: templates/postgresql.conf.j2
+        dest: "{{ pg_data_dir }}/postgresql.conf"
+        owner: postgres
+        group: postgres
+        mode: "0644"
+        backup: yes
+      notify: reload postgresql
+
+    - name: Configurar SELinux para PostgreSQL
+      ansible.builtin.command: setsebool -P postgresql_can_network_connect 1
+      when: 
+        - ansible_selinux.status == "enabled"
+        - pg_allow_remote_connections | bool
+      failed_when: false
+
+    - name: Configurar firewall para PostgreSQL
+      ansible.builtin.firewalld:
+        port: "{{ pg_port }}/tcp"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: 
+        - ansible_facts.services['firewalld.service'] is defined
+        - pg_allow_remote_connections | bool
+      failed_when: false
+
+    - name: Iniciar e habilitar serviço PostgreSQL
+      ansible.builtin.systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Aguardar PostgreSQL estar pronto
+      ansible.builtin.wait_for:
+        port: "{{ pg_port }}"
+        host: "127.0.0.1"
+        delay: 10
+        timeout: 60
+
+    - name: Verificar versão do PostgreSQL
+      become_user: postgres
+      ansible.builtin.command: psql -tAc "SELECT version();"
+      register: pg_version_output
+      changed_when: false
+
+    - name: Verificar status do serviço
+      ansible.builtin.systemd:
+        name: postgresql
+      register: pg_service_status
+
+    - name: Verificar conectividade
+      become_user: postgres
+      ansible.builtin.command: psql -tAc "SELECT 1;"
+      register: pg_connectivity_test
+      changed_when: false
+
+  post_tasks:
+    - name: Exibir informações de instalação
+      ansible.builtin.debug:
+        msg: |
+          PostgreSQL instalado com sucesso!
+          Versão: {{ pg_version_output.stdout }}
+          Status do serviço: {{ pg_service_status.status.ActiveState }}
+          Conectividade: {{ 'OK' if pg_connectivity_test.rc == 0 else 'FALHOU' }}
+          Diretório de dados: {{ pg_data_dir }}
+          Porta: {{ pg_port }}
+
+  handlers:
+    - name: reload postgresql
+      ansible.builtin.systemd:
+        name: postgresql
+        state: reloaded
+
+    - name: restart postgresql
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted

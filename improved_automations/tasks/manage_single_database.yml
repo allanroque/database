@@ -1,0 +1,100 @@
+---
+- name: Verificar se banco existe
+  become_user: "{{ pg_user }}"
+  ansible.builtin.command: >
+    psql -tAc "SELECT 1 FROM pg_database WHERE datname='{{ current_db.name }}';"
+  register: db_exists
+  changed_when: false
+
+- name: Criar banco de dados
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    createdb -O {{ current_db.owner }} 
+    {% if current_db.template != 'template0' %}--template={{ current_db.template }}{% endif %}
+    {% if current_db.encoding %}--encoding={{ current_db.encoding }}{% endif %}
+    {% if current_db.locale %}--locale={{ current_db.locale }}{% endif %}
+    {% if current_db.collate %}--lc-collate={{ current_db.collate }}{% endif %}
+    {% if current_db.ctype %}--lc-ctype={{ current_db.ctype }}{% endif %}
+    {% if current_db.tablespace %}--tablespace={{ current_db.tablespace }}{% endif %}
+    {{ current_db.name }}
+  when: db_exists.stdout.strip() | length == 0
+  register: create_db_result
+
+- name: Configurar limite de conexões do banco
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -c
+    "ALTER DATABASE {{ current_db.name }} CONNECTION LIMIT {{ current_db.connection_limit }};"
+  when: current_db.connection_limit is defined and current_db.connection_limit != -1
+  changed_when: false
+
+- name: Adicionar comentário ao banco
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -c
+    "COMMENT ON DATABASE {{ current_db.name }} IS '{{ current_db.comment }}';"
+  when: current_db.comment is defined
+  changed_when: false
+
+- name: Criar schemas adicionais
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ current_db.name }} -c
+    "CREATE SCHEMA IF NOT EXISTS {{ schema_item.name }} AUTHORIZATION {{ schema_item.owner }};"
+  loop: "{{ current_db.schemas | default([]) }}"
+  loop_control:
+    loop_var: schema_item
+  when: 
+    - current_db.schemas is defined
+    - schema_item.name != 'public'
+  changed_when: false
+
+- name: Instalar extensões
+  become_user: "{{ pg_user }}"
+  ansible.builtin.shell: >
+    psql -v ON_ERROR_STOP=1 -d {{ current_db.name }} -c
+    "CREATE EXTENSION IF NOT EXISTS {{ item }};"
+  loop: "{{ current_db.extensions | default([]) }}"
+  changed_when: false
+
+- name: Verificar banco criado/configurado
+  become_user: "{{ pg_user }}"
+  ansible.builtin.command: >
+    psql -tAc "SELECT datname, pg_size_pretty(pg_database_size(datname)), 
+                      pg_catalog.pg_get_userbyid(datdba) as owner
+               FROM pg_database 
+               WHERE datname='{{ current_db.name }}';"
+  register: db_check
+  changed_when: false
+
+- name: Verificar schemas do banco
+  become_user: "{{ pg_user }}"
+  ansible.builtin.command: >
+    psql -tAc "SELECT nspname, pg_get_userbyid(nspowner) as owner 
+               FROM pg_namespace 
+               WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'
+               ORDER BY nspname;" -d {{ current_db.name }}
+  register: schemas_check
+  changed_when: false
+
+- name: Verificar extensões do banco
+  become_user: "{{ pg_user }}"
+  ansible.builtin.command: >
+    psql -tAc "SELECT extname, extversion 
+               FROM pg_extension 
+               ORDER BY extname;" -d {{ current_db.name }}
+  register: extensions_check
+  changed_when: false
+
+- name: Exibir informações do banco
+  ansible.builtin.debug:
+    msg: |
+      Banco '{{ current_db.name }}' processado:
+      - Status: {{ 'Criado' if db_exists.stdout.strip() | length == 0 else 'Já existia' }}
+      - Owner: {{ current_db.owner }}
+      - Template: {{ current_db.template }}
+      - Encoding: {{ current_db.encoding }}
+      - Connection Limit: {{ current_db.connection_limit }}
+      - Schemas: {{ current_db.schemas | map(attribute='name') | list | join(', ') if current_db.schemas else 'apenas public' }}
+      - Extensões: {{ current_db.extensions | join(', ') if current_db.extensions else 'nenhuma' }}
+      - Tamanho: {{ db_check.stdout.split('|')[1] if db_check.stdout else 'N/A' }}
