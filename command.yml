@@ -22,3 +22,7 @@
     - name: Exibir saída do comando
       debug:
         var: command_output.stdout_lines
+
+    - set_stats:
+        data:
+          sn_close_notes: "{{ command_output.stdout }}"

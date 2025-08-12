@@ -187,15 +187,7 @@
             $smo = New-Object Microsoft.SqlServer.Management.Smo.Server "localhost"
             
             Write-Output "=== ÚLTIMOS ERROS ==="
-            $query = @"
-            SELECT TOP 20 
-                LogDate,
-                ProcessInfo,
-                Text
-            FROM sys.fn_get_audit_file('C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\Log\ERRORLOG*', NULL, NULL)
-            WHERE Text LIKE '%Error%' OR Text LIKE '%Failed%' OR Text LIKE '%Exception%'
-            ORDER BY LogDate DESC
-"@
+            $query = "SELECT TOP 20 LogDate, ProcessInfo, Text FROM sys.fn_get_audit_file('C:\Program Files\Microsoft SQL Server\MSSQL15.MSSQLSERVER\MSSQL\Log\ERRORLOG*', NULL, NULL) WHERE Text LIKE '%Error%' OR Text LIKE '%Failed%' OR Text LIKE '%Exception%' ORDER BY LogDate DESC"
             try {
               $results = $smo.Databases['master'].ExecuteWithResults($query)
               $results.Tables[0] | ForEach-Object { "$($_.LogDate) - $($_.ProcessInfo): $($_.Text)" }
@@ -232,20 +224,19 @@
         health_warnings: []
 
     - name: Verificar uso de conexões
-      when: sql_connectivity.rc == 0
-      set_fact:
-        health_alerts: "{{ health_alerts + ['Uso de conexões alto: ' + (sql_connections.stdout | regex_search('Current Connections: (\\d+)') | regex_replace('Current Connections: ', '') | int | string) + ' conexões ativas'] }}"
       when: 
+        - sql_connectivity.rc == 0
         - sql_connections.stdout is defined
         - (sql_connections.stdout | regex_search('Current Connections: (\\d+)') | regex_replace('Current Connections: ', '') | int) > max_connections_threshold
+      set_fact:
+        health_alerts: "{{ health_alerts + ['Uso de conexões alto: ' + (sql_connections.stdout | regex_search('Current Connections: (\\d+)') | regex_replace('Current Connections: ', '') | int | string) + ' conexões ativas'] }}"
 
     - name: Verificar uso de disco
-      when: disk_usage.stdout is defined
-      set_fact:
-        health_warnings: "{{ health_warnings + ['Uso de disco alto: ' + (disk_usage.stdout | regex_search('(\\d+\\.\\d+)%') | string)] }}"
       when: 
         - disk_usage.stdout is defined
         - (disk_usage.stdout | regex_search('(\\d+\\.\\d+)%') | regex_replace('%', '') | float) > disk_usage_threshold
+      set_fact:
+        health_warnings: "{{ health_warnings + ['Uso de disco alto: ' + (disk_usage.stdout | regex_search('(\\d+\\.\\d+)%') | string)] }}"
 
     - name: Verificar serviços SQL Server
       when: sql_service_status.status.State != 'Running'
