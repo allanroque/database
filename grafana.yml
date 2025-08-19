@@ -1,0 +1,38 @@
+---
+- name: Ajustar refresh de dashboard no Grafana usando user/pass
+  hosts: localhost
+  gather_facts: no
+  vars:
+    grafana_url: "http://localhost:3000"
+    grafana_user:
+    grafana_password:
+    dashboard_uid: "a2848c19-ddf5-47c5-b2e6-6e5c6966cda7"
+    new_refresh: "30s"
+
+  tasks:
+    - name: Buscar dashboard atual
+      uri:
+        url: "{{ grafana_url }}/api/dashboards/uid/{{ dashboard_uid }}"
+        method: GET
+        user: "{{ grafana_user }}"
+        password: "{{ grafana_password }}"
+        force_basic_auth: yes
+        return_content: yes
+      register: dashboard_data
+
+    - name: Atualizar refresh interval
+      uri:
+        url: "{{ grafana_url }}/api/dashboards/db"
+        method: POST
+        user: "{{ grafana_user }}"
+        password: "{{ grafana_password }}"
+        force_basic_auth: yes
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body: |
+          {
+            "dashboard": {{ dashboard_data.json.dashboard | combine({'refresh': new_refresh}) }},
+            "overwrite": true
+          }
+
