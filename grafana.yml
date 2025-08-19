@@ -4,8 +4,8 @@
   gather_facts: no
   vars:
     grafana_url: "http://localhost:3000"
-    grafana_user:
-    grafana_password:
+    grafana_user: "admin"
+    grafana_password: "senha"
     dashboard_uid: "a2848c19-ddf5-47c5-b2e6-6e5c6966cda7"
     new_refresh: "30s"
 
@@ -35,4 +35,15 @@
             "dashboard": {{ dashboard_data.json.dashboard | combine({'refresh': new_refresh}) }},
             "overwrite": true
           }
+      register: update_result
+
+    - name: Exibir evidências do update
+      debug:
+        msg:
+          - "Status: {{ update_result.json.status }}"
+          - "UID: {{ update_result.json.uid }}"
+          - "Dashboard: {{ update_result.json.slug }}"
+          - "URL: {{ grafana_url }}{{ update_result.json.url }}"
+          - "Versão: {{ update_result.json.version }}"
+          - "Refresh
 
